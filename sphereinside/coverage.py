@@ -17,6 +17,15 @@ def fibonacci_sphere(n):
     return np.stack([r * np.cos(t), r * np.sin(t), z], 1)
 
 
+def _percent(x, digits=0):
+    """無條件捨去，避免把還有缺漏的情形顯示成 100%，或把缺了一點顯示成 0%。"""
+    k = 10 ** digits
+    floored = np.floor(x * 100 * k) / k
+    if floored == 0 and x > 0:
+        return f"不到 {1 / k:g}%"
+    return f"{floored:.{digits}f}%"
+
+
 @dataclass
 class CoverageReport:
     fraction: float  # 已涵蓋的比例，0–1
@@ -29,9 +38,9 @@ class CoverageReport:
     def describe(self):
         if self.complete:
             return "照片已涵蓋所有方向。"
-        lines = [f"照片只涵蓋 {self.fraction:.1%} 的方向，以下範圍還沒拍到："]
+        lines = [f"照片涵蓋了 {_percent(self.fraction, 2)} 的方向，以下範圍還沒拍到："]
         for az, el, frac in self.missing[:_MAX_LINES]:
-            lines.append(f"  方位 {az:3d}°–{az + _BIN:3d}°、仰角 {el:+3d}°–{el + _BIN:+3d}°（缺 {frac:.0%}）")
+            lines.append(f"  方位 {az:3d}°–{az + _BIN:3d}°、仰角 {el:+3d}°–{el + _BIN:+3d}°（缺 {_percent(frac)}）")
         if len(self.missing) > _MAX_LINES:
             lines.append(f"  …以及另外 {len(self.missing) - _MAX_LINES} 個範圍")
         return "\n".join(lines)

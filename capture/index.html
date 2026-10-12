@@ -22,6 +22,14 @@
   label { color: var(--muted); }
   input { font: inherit; width: 5em; padding: 8px; border: 1px solid #39424d; border-radius: 6px; background: var(--panel); color: var(--text); }
   #message { color: var(--warn); }
+  h2 { font-size: 18px; margin: 28px 0 8px; padding-top: 20px; border-top: 1px solid #2b323b; }
+  select { font: inherit; padding: 8px; border: 1px solid #39424d; border-radius: 6px; background: var(--panel); color: var(--text); }
+  input[type=file] { width: 100%; }
+  input[type=checkbox] { width: auto; margin-right: 6px; }
+  .grid { display: grid; grid-template-columns: auto 1fr; gap: 10px 12px; align-items: center; margin: 12px 0; }
+  .grid input, .grid select { width: 100%; }
+  a.button { padding: 12px 18px; border-radius: 8px; background: var(--panel); color: var(--accent); text-decoration: none; font-weight: 600; }
+  pre { margin: 12px 0; padding: 12px; background: var(--panel); border-radius: 8px; color: var(--muted); font: 13px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -36,6 +44,8 @@
       <input id="fov" type="number" min="20" max="150" step="0.5" value="65">
     </div>
     <div class="row"><button id="start" class="primary">開始</button></div>
+    <p>已經拍好了？選擇先前下載的 ZIP，直接到下方產生展開圖。</p>
+    <div class="row"><input id="zip" type="file" accept=".zip,application/zip"></div>
   </section>
 
   <section id="shoot" hidden>
@@ -57,6 +67,27 @@
   </section>
 
   <p id="message"></p>
+
+  <section id="build">
+    <h2>產生展開圖</h2>
+    <p>合成在這台裝置的瀏覽器裡進行，照片不會上傳到任何地方。第一次使用要下載約 30 MB 的執行環境；手機上可能需要一兩分鐘。</p>
+    <div class="grid">
+      <label for="level">面數</label>
+      <select id="level"><option value="0">20 面</option><option value="1" selected>60 面</option><option value="2">180 面</option></select>
+      <label for="diameter">直徑（公釐）</label>
+      <input id="diameter" type="number" min="40" max="600" step="5" value="150">
+      <label for="paper">紙張</label>
+      <select id="paper"><option>A4</option><option>A3</option><option>Letter</option></select>
+      <label for="dpi">解析度</label>
+      <select id="dpi"><option value="200" selected>標準（200 dpi）</option><option value="300">精細（300 dpi，較慢）</option></select>
+    </div>
+    <div class="row"><label><input id="gaps" type="checkbox"> 照片沒有涵蓋所有方向時仍然輸出，缺的地方填灰色</label></div>
+    <div class="row">
+      <button id="make" class="primary" disabled>產生 PDF</button>
+      <a id="result" class="button" hidden download="sphereinside.pdf">下載 PDF</a>
+    </div>
+    <pre id="log" hidden></pre>
+  </section>
 </main>
 
 <script>
@@ -242,6 +273,7 @@ function refresh() {
   $("count").textContent = shots.length;
   $("cover").textContent = Math.floor(covered.filter(Boolean).length / POINTS.length * 100) + "%";
   $("undo").disabled = $("download").disabled = shots.length === 0;
+  updateMake();
 }
 
 function tick() {
@@ -302,7 +334,8 @@ function shoot() {
   }, "image/jpeg", 0.92);
 }
 
-async function download() {
+// 照片與對照檔，與下載的 ZIP 內容相同
+async function collectFiles() {
   const round = (x) => Math.round(x * 100) / 100;
   const files = [], photos = [];
   for (let i = 0; i < shots.length; i++) {
@@ -311,17 +344,81 @@ async function download() {
     photos.push({ file: name, azimuth: round(s.azimuth), elevation: round(s.elevation), roll: round(s.roll), hfov: round(s.hfov) });
   }
   files.push({ name: "meta.json", data: new TextEncoder().encode(JSON.stringify({ photos }, null, 2)) });
+  return files;
+}
+
+async function download() {
   const link = document.createElement("a");
-  link.href = URL.createObjectURL(makeZip(files));
+  link.href = URL.createObjectURL(makeZip(await collectFiles()));
   link.download = "sphereinside-photos.zip";
   link.click();
   setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+}
+
+// ---- 產生展開圖 ------------------------------------------------------------
+
+let worker = null, building = false;
+
+function updateMake() {
+  $("make").disabled = building || (shots.length === 0 && $("zip").files.length === 0);
+}
+
+function log(text) {
+  $("log").hidden = false;
+  $("log").textContent += text + "\n";
+}
+
+function finish() {
+  building = false;
+  updateMake();
+}
+
+async function make() {
+  building = true;
+  updateMake();
+  $("log").textContent = "";
+  $("result").hidden = true;
+  const job = {
+    files: [],
+    zip: null,
+    args: ["--level", $("level").value, "--diameter", String(Number($("diameter").value) || 150), "--paper", $("paper").value, "--dpi", $("dpi").value],
+  };
+  if ($("gaps").checked) job.args.push("--allow-gaps");
+  // 這次拍的照片優先；沒有才用選擇的 ZIP
+  if (shots.length > 0) job.files = await collectFiles();
+  else job.zip = new Uint8Array(await $("zip").files[0].arrayBuffer());
+
+  if (!worker) {
+    worker = new Worker("build-worker.js");
+    worker.onmessage = (event) => {
+      const m = event.data;
+      if (m.type === "log") return log(m.text);
+      if (m.type === "done") {
+        const link = $("result");
+        if (link.href) URL.revokeObjectURL(link.href);
+        link.href = URL.createObjectURL(new Blob([m.pdf], { type: "application/pdf" }));
+        link.hidden = false;
+        log("完成。");
+      } else {
+        log("沒有產生 PDF。");
+      }
+      finish();
+    };
+    worker.onerror = (event) => {
+      log("合成時發生錯誤：" + (event.message || "無法啟動"));
+      worker = null;
+      finish();
+    };
+  }
+  worker.postMessage(job);
 }
 
 $("start").addEventListener("click", start);
 $("shutter").addEventListener("click", shoot);
 $("undo").addEventListener("click", () => { shots.pop(); refresh(); });
 $("download").addEventListener("click", download);
+$("zip").addEventListener("change", updateMake);
+$("make").addEventListener("click", make);
 </script>
 </body>
 </html>
