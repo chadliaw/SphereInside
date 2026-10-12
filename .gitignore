@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+
+# 由 examples/make_demo.py 產生，可以隨時重建
+examples/demo/
