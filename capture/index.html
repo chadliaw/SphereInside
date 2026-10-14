@@ -3,13 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>SphereInside 拍攝</title>
+<title>SphereInside</title>
 <style>
   :root { color-scheme: dark; --bg: #111418; --panel: #1c2128; --text: #e8eaed; --muted: #9aa3ad; --accent: #4cc38a; --warn: #e5734f; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, "Noto Sans TC", sans-serif; }
   main { max-width: 640px; margin: 0 auto; padding: 16px; }
+  .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   h1 { font-size: 20px; margin: 0 0 8px; }
+  h2 { font-size: 18px; margin: 28px 0 8px; padding-top: 20px; border-top: 1px solid #2b323b; }
+  h3 { font-size: 16px; margin: 16px 0 4px; }
   p { margin: 8px 0; color: var(--muted); }
   video { width: 100%; max-height: 55vh; background: #000; border-radius: 8px; display: block; object-fit: contain; }
   canvas#map { width: 100%; aspect-ratio: 2 / 1; background: var(--panel); border-radius: 8px; display: block; margin-top: 12px; }
@@ -20,16 +23,16 @@
   button.primary { background: var(--accent); color: #06281a; font-weight: 600; flex: 1; }
   button:disabled { opacity: .45; }
   label { color: var(--muted); }
-  input { font: inherit; width: 5em; padding: 8px; border: 1px solid #39424d; border-radius: 6px; background: var(--panel); color: var(--text); }
-  #message { color: var(--warn); }
-  h2 { font-size: 18px; margin: 28px 0 8px; padding-top: 20px; border-top: 1px solid #2b323b; }
-  select { font: inherit; padding: 8px; border: 1px solid #39424d; border-radius: 6px; background: var(--panel); color: var(--text); }
+  input, select { font: inherit; padding: 8px; border: 1px solid #39424d; border-radius: 6px; background: var(--panel); color: var(--text); }
+  input { width: 5em; }
   input[type=file] { width: 100%; }
   input[type=checkbox] { width: auto; margin-right: 6px; }
+  #message { color: var(--warn); }
   .grid { display: grid; grid-template-columns: auto 1fr; gap: 10px 12px; align-items: center; margin: 12px 0; }
   .grid input, .grid select { width: 100%; }
   a.button { padding: 12px 18px; border-radius: 8px; background: var(--panel); color: var(--accent); text-decoration: none; font-weight: 600; }
   pre { margin: 12px 0; padding: 12px; background: var(--panel); border-radius: 8px; color: var(--muted); font: 13px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+
   #align { position: fixed; inset: 0; z-index: 10; overflow: auto; background: var(--bg); }
   #align .viewer { position: relative; height: 62vh; min-height: 280px; background: #000; }
   #align .viewer canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
@@ -38,25 +41,36 @@
   #align .row { margin: 8px 0; }
   #align button { padding: 10px 14px; }
   #align button[aria-pressed="true"] { background: var(--accent); color: #06281a; }
-  #photoInfo { color: var(--text); }
-  .fields { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 8px 0; }
+  #photoInfo, #alignStatus { color: var(--text); }
+  .fields { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 8px 0; }
   .fields label { display: flex; align-items: center; gap: 6px; }
   .fields input { width: 6.5em; font-variant-numeric: tabular-nums; }
+  .cards { display: flex; gap: 10px; overflow-x: auto; padding: 4px 0 8px; }
+  .card { flex: 0 0 auto; width: 120px; background: var(--panel); border-radius: 8px; padding: 6px; border: 2px solid transparent; }
+  .card.current { border-color: #f2c94c; }
+  .card img { width: 100%; height: 120px; object-fit: contain; background: #000; border-radius: 4px; display: block; cursor: pointer; }
+  .card .name { font-size: 13px; color: var(--text); margin-top: 4px; }
+  .card .meta { font-size: 12px; color: var(--muted); }
+  .card .meta.used { color: var(--accent); }
+  .card button { width: 100%; margin-top: 4px; padding: 6px; font-size: 13px; }
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
-  <h1>SphereInside 拍攝</h1>
+  <div class="top">
+    <h1 data-i18n="title">SphereInside 拍攝</h1>
+    <select id="lang" aria-label="Language"><option value="zh">中文</option><option value="en">English</option></select>
+  </div>
 
   <section id="intro">
-    <p>站在定點，讓手機繞著鏡頭轉動，朝四面八方各拍一張，直到下方的地圖全部變成綠色。相鄰的照片要互相重疊，正上方與正下方也要拍。</p>
+    <p data-i18n="intro.text"></p>
     <div class="row">
-      <label for="fov">鏡頭長邊視角（度）</label>
+      <label for="fov" data-i18n="intro.fov"></label>
       <input id="fov" type="number" min="20" max="150" step="0.5" value="65">
     </div>
-    <div class="row"><button id="start" class="primary">開始</button></div>
-    <p>已經拍好了？選擇先前下載的 ZIP，直接到下方對齊照片或產生展開圖。</p>
+    <div class="row"><button id="start" class="primary" data-i18n="intro.start"></button></div>
+    <p data-i18n="intro.zip"></p>
     <div class="row"><input id="zip" type="file" accept=".zip,application/zip"></div>
     <p id="loaded"></p>
   </section>
@@ -64,42 +78,58 @@
   <section id="shoot" hidden>
     <video id="video" playsinline muted></video>
     <div class="readout">
-      <span>方位 <b id="az">–</b></span>
-      <span>仰角 <b id="el">–</b></span>
-      <span>傾斜 <b id="roll">–</b></span>
-      <span>已拍 <b id="count">0</b> 張</span>
-      <span>已涵蓋 <b id="cover">0%</b></span>
+      <span><span data-i18n="shoot.azimuth"></span> <b id="az">–</b></span>
+      <span><span data-i18n="shoot.elevation"></span> <b id="el">–</b></span>
+      <span><span data-i18n="shoot.roll"></span> <b id="roll">–</b></span>
+      <span><span data-i18n="shoot.count"></span> <b id="count">0</b></span>
+      <span><span data-i18n="shoot.cover"></span> <b id="cover">0%</b></span>
     </div>
     <div class="row">
-      <button id="shutter" class="primary">拍照</button>
-      <button id="undo" disabled>刪除上一張</button>
+      <button id="shutter" class="primary" data-i18n="shoot.shutter"></button>
+      <button id="undo" disabled data-i18n="shoot.undo"></button>
     </div>
     <canvas id="map" width="720" height="360"></canvas>
-    <p>地圖橫軸是方位、縱軸是仰角；紅色是還沒拍到的方向，十字是鏡頭現在對準的位置。</p>
-    <div class="row"><button id="download" disabled>下載照片與對照檔（ZIP）</button></div>
+    <p data-i18n="shoot.map"></p>
+    <div class="row"><button id="download" disabled data-i18n="shoot.download"></button></div>
   </section>
 
   <p id="message"></p>
 
   <section id="build">
-    <h2>產生展開圖</h2>
-    <p>合成在這台裝置的瀏覽器裡進行，照片不會上傳到任何地方。第一次使用要下載約 30 MB 的執行環境；手機上可能需要一兩分鐘。</p>
+    <h2 data-i18n="build.title"></h2>
+    <p data-i18n="build.note"></p>
     <div class="grid">
-      <label for="level">面數</label>
-      <select id="level"><option value="0">20 面</option><option value="1" selected>60 面</option><option value="2">180 面</option></select>
-      <label for="diameter">直徑（公釐）</label>
+      <label for="level" data-i18n="build.level"></label>
+      <select id="level">
+        <option value="0" data-i18n="build.faces" data-i18n-params='{"n":20}'></option>
+        <option value="1" selected data-i18n="build.faces" data-i18n-params='{"n":60}'></option>
+        <option value="2" data-i18n="build.faces" data-i18n-params='{"n":180}'></option>
+      </select>
+      <label for="diameter" data-i18n="build.diameter"></label>
       <input id="diameter" type="number" min="40" max="600" step="5" value="150">
-      <label for="paper">紙張</label>
+      <label for="paper" data-i18n="build.paper"></label>
       <select id="paper"><option>A4</option><option>A3</option><option>Letter</option></select>
-      <label for="dpi">解析度</label>
-      <select id="dpi"><option value="200" selected>標準（200 dpi）</option><option value="300">精細（300 dpi，較慢）</option></select>
+      <label for="dpi" data-i18n="build.dpi"></label>
+      <select id="dpi">
+        <option value="200" selected data-i18n="build.dpi200"></option>
+        <option value="300" data-i18n="build.dpi300"></option>
+      </select>
+      <label for="labels" data-i18n="build.labels"></label>
+      <select id="labels">
+        <option value="inside" data-i18n="build.labelsInside"></option>
+        <option value="outside" selected data-i18n="build.labelsOutside"></option>
+        <option value="none" data-i18n="build.labelsNone"></option>
+      </select>
     </div>
-    <div class="row"><label><input id="gaps" type="checkbox"> 照片沒有涵蓋所有方向時仍然輸出，缺的地方填灰色</label></div>
-    <p>照片接縫對不齊時，可以先手動對齊再產生 PDF。</p>
-    <div class="row"><button id="openAlign" disabled>手動對齊照片</button></div>
+    <div class="row"><label><input id="gaps" type="checkbox"><span data-i18n="build.gaps"></span></label></div>
+    <p data-i18n="build.alignNote"></p>
     <div class="row">
-      <button id="make" class="primary" disabled>產生 PDF</button>
-      <a id="result" class="button" hidden download="sphereinside.pdf">下載 PDF</a>
+      <button id="openAlign" disabled data-i18n="build.align"></button>
+      <button id="openCompose" disabled data-i18n="build.compose"></button>
+    </div>
+    <div class="row">
+      <button id="make" class="primary" disabled data-i18n="build.make"></button>
+      <a id="result" class="button" hidden download="sphereinside.pdf" data-i18n="build.result"></a>
     </div>
     <pre id="log" hidden></pre>
   </section>
@@ -113,547 +143,74 @@
   <div class="controls">
     <p id="alignStatus"></p>
     <div class="row">
-      <button id="modeView" aria-pressed="true">移動視角</button>
-      <button id="modeAdjust" aria-pressed="false">調整照片</button>
-      <label><input id="translucent" type="checkbox"> 選取的照片半透明</label>
-      <label><input id="showMesh" type="checkbox" checked> 顯示多面體</label>
+      <button id="modeView" aria-pressed="true" data-i18n="align.modeView"></button>
+      <button id="modeAdjust" aria-pressed="false" data-i18n="align.modeAdjust"></button>
+      <button id="modeCrop" aria-pressed="false" data-i18n="align.modeCrop"></button>
+      <label><input id="translucent" type="checkbox"><span data-i18n="align.translucent"></span></label>
+      <label><input id="showMesh" type="checkbox" checked><span data-i18n="align.showMesh"></span></label>
     </div>
     <div class="row">
-      <button id="prevVertex">◀ 上一個頂點</button>
-      <span id="vertexInfo">–</span>
-      <button id="nextVertex">下一個頂點 ▶</button>
+      <button id="prevVertex" data-i18n="align.prevVertex"></button>
+      <span id="vertexInfo"></span>
+      <button id="nextVertex" data-i18n="align.nextVertex"></button>
     </div>
-    <p id="photoInfo">點一下畫面，選取負責那一塊的照片。</p>
+
+    <p id="photoInfo"></p>
     <div class="fields" id="photoFields" hidden>
-      <label>方位 <input data-field="azimuth" type="number" step="0.1"> °</label>
-      <label>仰角 <input data-field="elevation" type="number" step="0.1" min="-90" max="90"> °</label>
-      <label>傾斜 <input data-field="roll" type="number" step="0.1"> °</label>
-      <label>視角 <input data-field="hfov" type="number" step="0.1" min="1" max="170"> °</label>
-      <label>順序 <input data-field="priority" type="number" step="1"></label>
+      <label><span data-i18n="align.azimuth"></span> <input data-field="azimuth" type="number" step="0.1"> °</label>
+      <label><span data-i18n="align.elevation"></span> <input data-field="elevation" type="number" step="0.1" min="-90" max="90"> °</label>
+      <label><span data-i18n="align.roll"></span> <input data-field="roll" type="number" step="0.1"> °</label>
+      <label><span data-i18n="align.hfov"></span> <input data-field="hfov" type="number" step="0.1" min="1" max="170"> °</label>
+      <label><span data-i18n="align.priority"></span> <input data-field="priority" type="number" step="1"></label>
+    </div>
+    <div class="fields" id="cropFields" hidden>
+      <span data-i18n="align.crop"></span>
+      <label><span data-i18n="align.cropLeft"></span> <input data-crop="0" type="number" step="1" min="0" max="100"></label>
+      <label><span data-i18n="align.cropTop"></span> <input data-crop="1" type="number" step="1" min="0" max="100"></label>
+      <label><span data-i18n="align.cropRight"></span> <input data-crop="2" type="number" step="1" min="0" max="100"></label>
+      <label><span data-i18n="align.cropBottom"></span> <input data-crop="3" type="number" step="1" min="0" max="100"></label>
+      <button id="cropReset" data-i18n="align.cropReset"></button>
     </div>
     <div class="row" id="orderRow" hidden>
-      <button id="toFront">移到最前</button>
-      <button id="toBack">移到最後</button>
-      <button id="autoOrder">自動順序</button>
+      <button id="useToggle"></button>
+      <button id="toFront" data-i18n="align.toFront"></button>
+      <button id="toBack" data-i18n="align.toBack"></button>
+      <button id="autoOrder" data-i18n="align.autoOrder"></button>
     </div>
     <div class="row">
-      <label>每次調整 <input id="step" type="number" value="0.2" min="0.01" step="0.1"> °</label>
-      <button data-nudge="-1,0" title="左移">←</button>
-      <button data-nudge="1,0" title="右移">→</button>
-      <button data-nudge="0,1" title="上移">↑</button>
-      <button data-nudge="0,-1" title="下移">↓</button>
-      <button data-roll="-1" title="逆時針旋轉">⟲</button>
-      <button data-roll="1" title="順時針旋轉">⟳</button>
-      <button data-zoom="-1" title="縮小">－</button>
-      <button data-zoom="1" title="放大">＋</button>
-      <label><input id="allFov" type="checkbox" checked> 縮放套用到所有照片</label>
+      <label><span data-i18n="align.step"></span> <input id="step" type="number" value="0.2" min="0.01" step="0.1"> °</label>
+      <button data-nudge="-1,0" data-i18n-title="align.left">←</button>
+      <button data-nudge="1,0" data-i18n-title="align.right">→</button>
+      <button data-nudge="0,1" data-i18n-title="align.up">↑</button>
+      <button data-nudge="0,-1" data-i18n-title="align.down">↓</button>
+      <button data-roll="-1" data-i18n-title="align.ccw">⟲</button>
+      <button data-roll="1" data-i18n-title="align.cw">⟳</button>
+      <button data-zoom="-1" data-i18n-title="align.narrower">－</button>
+      <button data-zoom="1" data-i18n-title="align.wider">＋</button>
+      <label><input id="allFov" type="checkbox" checked><span data-i18n="align.allFov"></span></label>
     </div>
+
+    <h3 data-i18n="align.candidates"></h3>
+    <p data-i18n="align.candidatesHint"></p>
+    <div class="cards" id="cards"></div>
     <div class="row">
-      <button id="alignUndo">復原</button>
-      <button id="alignReset">重設這張</button>
-      <button id="alignDownload">下載修正後的 ZIP</button>
-      <button id="alignDone" class="primary">完成</button>
+      <button id="useNone" data-i18n="align.useNone"></button>
+      <button id="useAll" data-i18n="align.useAll"></button>
     </div>
-    <p>移動視角：拖曳轉動，滾輪或雙指縮放。調整照片：拖曳移動選取的照片，滾輪或雙指縮放改變視角，雙指轉動改變傾斜。也可以直接輸入數值，或用按鈕與鍵盤（方向鍵、[ ]、- =）依「每次調整」的角度微調，按住 Shift 加大五倍。</p>
-    <p>順序決定照片重疊時誰在上面：數字大的在上面，相同時由鏡頭中心較近的那張負責。全部是 0 就是自動。</p>
+
+    <div class="row">
+      <button id="alignUndo" data-i18n="align.undo"></button>
+      <button id="alignReset" data-i18n="align.reset"></button>
+      <button id="alignDownload" data-i18n="align.download"></button>
+      <button id="alignDone" class="primary" data-i18n="align.done"></button>
+    </div>
+    <p data-i18n="align.helpView"></p>
+    <p data-i18n="align.helpOrder"></p>
   </div>
 </section>
 
+<script src="i18n.js"></script>
 <script src="align.js"></script>
-<script>
-"use strict";
-
-// ---- 方向 ----------------------------------------------------------------
-// 世界座標與 Python 端相同：+x 朝方位 0°，+y 朝方位 270°，+z 朝正上方。
-
-const RAD = Math.PI / 180;
-const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-
-// 裝置座標（x 朝螢幕右方、y 朝螢幕上方、z 朝使用者）→ 世界座標。
-// alpha、beta、gamma 是 deviceorientation 事件的三個角度。
-function deviceToWorld(alpha, beta, gamma) {
-  const cA = Math.cos(alpha * RAD), sA = Math.sin(alpha * RAD);
-  const cB = Math.cos(beta * RAD), sB = Math.sin(beta * RAD);
-  const cG = Math.cos(gamma * RAD), sG = Math.sin(gamma * RAD);
-  // 規格定義的矩陣，結果是（東、北、上）
-  const m = [
-    [cA * cG - sA * sB * sG, -cB * sA, cG * sA * sB + cA * sG],
-    [cG * sA + cA * sB * sG, cA * cB, sA * sG - cA * cG * sB],
-    [-cB * sG, sB, cB * cG],
-  ];
-  return (v) => {
-    const e = dot(m[0], v), n = dot(m[1], v), u = dot(m[2], v);
-    return [n, -e, u];
-  };
-}
-
-// 鏡頭的前、右、上（與 sphereinside/camera.py 的 basis 相同）
-function basis(azimuth, elevation, roll) {
-  const th = -azimuth * RAD, e = elevation * RAD, ro = roll * RAD;
-  const fwd = [Math.cos(e) * Math.cos(th), Math.cos(e) * Math.sin(th), Math.sin(e)];
-  const right0 = [Math.sin(th), -Math.cos(th), 0];
-  const up0 = cross(right0, fwd);
-  const c = Math.cos(ro), s = Math.sin(ro);
-  return {
-    fwd,
-    right: right0.map((x, i) => c * x + s * up0[i]),
-    up: right0.map((x, i) => -s * x + c * up0[i]),
-  };
-}
-
-// basis 的反運算：由鏡頭的前、右兩個方向求方位、仰角與傾斜
-function paramsFromBasis(fwd, right) {
-  const azimuth = ((Math.atan2(-fwd[1], fwd[0]) / RAD) % 360 + 360) % 360;
-  const elevation = Math.asin(Math.max(-1, Math.min(1, fwd[2]))) / RAD;
-  const ref = basis(azimuth, elevation, 0);
-  const roll = Math.atan2(dot(right, ref.up), dot(right, ref.right)) / RAD;
-  return { azimuth, elevation, roll };
-}
-
-// 由裝置的姿態求後鏡頭的方位、仰角與傾斜。screenAngle 是 screen.orientation.angle。
-function pose(alpha, beta, gamma, screenAngle) {
-  const toWorld = deviceToWorld(alpha, beta, gamma);
-  const a = screenAngle * RAD;
-  return paramsFromBasis(toWorld([0, 0, -1]), toWorld([Math.cos(a), -Math.sin(a), 0]));
-}
-
-// 沿影像寬度方向的視角
-function horizontalFov(longFov, width, height) {
-  const focal = Math.max(width, height) / 2 / Math.tan(longFov * RAD / 2);
-  return 2 * Math.atan(width / 2 / focal) / RAD;
-}
-
-// ---- 涵蓋範圍 --------------------------------------------------------------
-
-function fibonacciSphere(n) {
-  const points = [];
-  for (let i = 0; i < n; i++) {
-    const z = 1 - 2 * (i + 0.5) / n, r = Math.sqrt(1 - z * z), t = Math.PI * (1 + Math.sqrt(5)) * (i + 0.5);
-    points.push([r * Math.cos(t), r * Math.sin(t), z]);
-  }
-  return points;
-}
-
-function covers(shot, d) {
-  const b = shot.basis, c = dot(d, b.fwd);
-  if (c <= 1e-9) return false;
-  const focal = shot.width / 2 / Math.tan(shot.hfov * RAD / 2);
-  return Math.abs(focal * dot(d, b.right) / c) <= shot.width / 2 && Math.abs(focal * dot(d, b.up) / c) <= shot.height / 2;
-}
-
-function coverage(shots, points) {
-  return points.map((d) => shots.some((s) => covers(s, d)));
-}
-
-// ---- ZIP（只儲存、不壓縮） ---------------------------------------------------
-
-const CRC_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    table[n] = c >>> 0;
-  }
-  return table;
-})();
-
-function crc32(bytes) {
-  let c = 0xffffffff;
-  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
-}
-
-// files: [{ name, data: Uint8Array }] → Blob
-function makeZip(files) {
-  const encoder = new TextEncoder();
-  const parts = [], central = [];
-  let offset = 0;
-  for (const file of files) {
-    const name = encoder.encode(file.name), crc = crc32(file.data), size = file.data.length;
-    const local = new DataView(new ArrayBuffer(30));
-    local.setUint32(0, 0x04034b50, true);
-    local.setUint16(4, 20, true);
-    local.setUint16(6, 0x0800, true);
-    local.setUint16(10, 0, true);
-    local.setUint16(12, 0x21, true);
-    local.setUint32(14, crc, true);
-    local.setUint32(18, size, true);
-    local.setUint32(22, size, true);
-    local.setUint16(26, name.length, true);
-    parts.push(local.buffer, name, file.data);
-
-    const entry = new DataView(new ArrayBuffer(46));
-    entry.setUint32(0, 0x02014b50, true);
-    entry.setUint16(4, 20, true);
-    entry.setUint16(6, 20, true);
-    entry.setUint16(8, 0x0800, true);
-    entry.setUint16(14, 0x21, true);
-    entry.setUint32(16, crc, true);
-    entry.setUint32(20, size, true);
-    entry.setUint32(24, size, true);
-    entry.setUint16(28, name.length, true);
-    entry.setUint32(42, offset, true);
-    central.push(entry.buffer, name);
-    offset += 30 + name.length + size;
-  }
-  const centralSize = central.reduce((n, p) => n + p.byteLength, 0);
-  const end = new DataView(new ArrayBuffer(22));
-  end.setUint32(0, 0x06054b50, true);
-  end.setUint16(8, files.length, true);
-  end.setUint16(10, files.length, true);
-  end.setUint32(12, centralSize, true);
-  end.setUint32(16, offset, true);
-  return new Blob([...parts, ...central, end.buffer], { type: "application/zip" });
-}
-
-// 讀取 ZIP：回傳 { 檔名: Uint8Array }。支援不壓縮與 deflate 壓縮
-async function readZip(buffer) {
-  const view = new DataView(buffer), bytes = new Uint8Array(buffer), decoder = new TextDecoder();
-  let end = -1;
-  for (let i = buffer.byteLength - 22; i >= Math.max(0, buffer.byteLength - 22 - 65535); i--) {
-    if (view.getUint32(i, true) === 0x06054b50) { end = i; break; }
-  }
-  if (end < 0) throw new Error("這不是 ZIP 檔。");
-  const files = {};
-  let p = view.getUint32(end + 16, true);
-  for (let n = view.getUint16(end + 10, true); n > 0; n--) {
-    if (view.getUint32(p, true) !== 0x02014b50) throw new Error("ZIP 檔已損毀。");
-    const method = view.getUint16(p + 10, true), size = view.getUint32(p + 20, true);
-    const nameLength = view.getUint16(p + 28, true), extra = view.getUint16(p + 30, true), comment = view.getUint16(p + 32, true);
-    const name = decoder.decode(bytes.subarray(p + 46, p + 46 + nameLength));
-    const local = view.getUint32(p + 42, true);
-    const start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
-    const raw = bytes.subarray(start, start + size);
-    if (method === 0) files[name] = raw;
-    else if (method === 8) files[name] = new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer());
-    p += 46 + nameLength + extra + comment;
-  }
-  return files;
-}
-
-// ---- 介面 ------------------------------------------------------------------
-
-const $ = (id) => document.getElementById(id);
-const POINTS = fibonacciSphere(3000);
-const shots = [];  // { name, blob, azimuth, elevation, roll, hfov, width, height, basis }；拍攝或讀入 ZIP 後都放在這裡
-let orientation = null, covered = POINTS.map(() => false);
-
-function currentPose() {
-  if (!orientation) return null;
-  const angle = screen.orientation ? screen.orientation.angle : (window.orientation || 0);
-  return pose(orientation.alpha, orientation.beta, orientation.gamma, angle);
-}
-
-function say(text) { $("message").textContent = text; }
-
-function drawMap(now) {
-  const canvas = $("map"), g = canvas.getContext("2d"), w = canvas.width, h = canvas.height;
-  g.clearRect(0, 0, w, h);
-  POINTS.forEach((d, i) => {
-    const az = ((Math.atan2(-d[1], d[0]) / RAD) + 360) % 360, el = Math.asin(d[2]) / RAD;
-    g.fillStyle = covered[i] ? "#4cc38a" : "#b5452f";
-    g.fillRect(az / 360 * w - 2, (90 - el) / 180 * h - 2, 4, 4);
-  });
-  if (now) {
-    const x = now.azimuth / 360 * w, y = (90 - now.elevation) / 180 * h;
-    g.strokeStyle = "#fff";
-    g.lineWidth = 2;
-    g.beginPath();
-    g.moveTo(x - 10, y); g.lineTo(x + 10, y);
-    g.moveTo(x, y - 10); g.lineTo(x, y + 10);
-    g.stroke();
-  }
-}
-
-function refresh() {
-  covered = coverage(shots, POINTS);
-  $("count").textContent = shots.length;
-  $("cover").textContent = Math.floor(covered.filter(Boolean).length / POINTS.length * 100) + "%";
-  $("undo").disabled = $("download").disabled = shots.length === 0;
-  updateMake();
-}
-
-function tick() {
-  const now = currentPose();
-  if (now) {
-    $("az").textContent = now.azimuth.toFixed(0) + "°";
-    $("el").textContent = now.elevation.toFixed(0) + "°";
-    $("roll").textContent = now.roll.toFixed(0) + "°";
-  }
-  drawMap(now);
-  setTimeout(tick, 100);
-}
-
-async function start() {
-  say("");
-  try {
-    if (typeof DeviceOrientationEvent === "undefined") throw new Error("這個瀏覽器不提供方向感測器。");
-    if (typeof DeviceOrientationEvent.requestPermission === "function") {
-      if (await DeviceOrientationEvent.requestPermission() !== "granted") throw new Error("需要允許使用動作與方向感測器。");
-    }
-    window.addEventListener("deviceorientation", (e) => {
-      if (e.alpha !== null && e.beta !== null && e.gamma !== null) orientation = { alpha: e.alpha, beta: e.beta, gamma: e.gamma };
-    });
-    if (!navigator.mediaDevices) throw new Error("無法使用相機；這個網頁必須透過 HTTPS 開啟。");
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1440 } },
-    });
-    $("video").srcObject = stream;
-    await $("video").play();
-  } catch (error) {
-    say(error.message || String(error));
-    return;
-  }
-  $("intro").hidden = true;
-  $("shoot").hidden = false;
-  refresh();
-  tick();
-}
-
-function shoot() {
-  const now = currentPose(), video = $("video");
-  if (!now) return say("還沒有收到方向感測器的讀數；這台裝置可能沒有方向感測器。");
-  if (!video.videoWidth) return say("相機還沒準備好。");
-  say("");
-  const canvas = document.createElement("canvas");
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  canvas.getContext("2d").drawImage(video, 0, 0);
-  const hfov = horizontalFov(Number($("fov").value) || 65, canvas.width, canvas.height);
-  canvas.toBlob((blob) => {
-    shots.push({
-      blob, hfov, width: canvas.width, height: canvas.height,
-      azimuth: now.azimuth, elevation: now.elevation, roll: now.roll,
-      basis: basis(now.azimuth, now.elevation, now.roll),
-    });
-    refresh();
-  }, "image/jpeg", 0.92);
-}
-
-// 照片與對照檔，與下載的 ZIP 內容相同
-async function collectFiles() {
-  const round = (x) => Math.round(x * 100) / 100;
-  const files = [], photos = [];
-  for (let i = 0; i < shots.length; i++) {
-    const s = shots[i], name = s.name || String(i + 1).padStart(3, "0") + ".jpg";
-    files.push({ name, data: new Uint8Array(await s.blob.arrayBuffer()) });
-    const entry = { file: name, azimuth: round(s.azimuth), elevation: round(s.elevation), roll: round(s.roll), hfov: round(s.hfov) };
-    if (s.priority) entry.priority = s.priority;
-    photos.push(entry);
-  }
-  files.push({ name: "meta.json", data: new TextEncoder().encode(JSON.stringify({ photos }, null, 2)) });
-  return files;
-}
-
-async function download() {
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(makeZip(await collectFiles()));
-  link.download = "sphereinside-photos.zip";
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(link.href), 60000);
-}
-
-// ---- 產生展開圖 ------------------------------------------------------------
-
-let worker = null, building = false;
-
-function updateMake() {
-  $("make").disabled = building || shots.length === 0;
-  $("openAlign").disabled = shots.length === 0;
-}
-
-function log(text) {
-  $("log").hidden = false;
-  $("log").textContent += text + "\n";
-}
-
-function finish() {
-  building = false;
-  updateMake();
-}
-
-async function make() {
-  building = true;
-  updateMake();
-  $("log").textContent = "";
-  $("result").hidden = true;
-  const job = {
-    files: await collectFiles(),
-    args: ["--level", $("level").value, "--diameter", String(Number($("diameter").value) || 150), "--paper", $("paper").value, "--dpi", $("dpi").value],
-  };
-  if ($("gaps").checked) job.args.push("--allow-gaps");
-
-  if (!worker) {
-    worker = new Worker("build-worker.js");
-    worker.onmessage = (event) => {
-      const m = event.data;
-      if (m.type === "log") return log(m.text);
-      if (m.type === "done") {
-        const link = $("result");
-        if (link.href) URL.revokeObjectURL(link.href);
-        link.href = URL.createObjectURL(new Blob([m.pdf], { type: "application/pdf" }));
-        link.hidden = false;
-        log("完成。");
-      } else {
-        log("沒有產生 PDF。");
-      }
-      finish();
-    };
-    worker.onerror = (event) => {
-      log("合成時發生錯誤：" + (event.message || "無法啟動"));
-      worker = null;
-      finish();
-    };
-  }
-  worker.postMessage(job);
-}
-
-// 讀入先前下載的 ZIP，取代目前的照片
-async function loadZip() {
-  const file = $("zip").files[0];
-  if (!file) return;
-  $("loaded").textContent = "讀取中…";
-  try {
-    const files = await readZip(await file.arrayBuffer());
-    const metaName = Object.keys(files).find((n) => n.split("/").pop() === "meta.json");
-    if (!metaName) throw new Error("ZIP 裡找不到 meta.json。");
-    const meta = JSON.parse(new TextDecoder().decode(files[metaName]));
-    const folder = metaName.slice(0, metaName.length - "meta.json".length);
-    const loaded = [];
-    for (const entry of meta.photos) {
-      const data = files[folder + entry.file];
-      if (!data) throw new Error(`ZIP 裡找不到 ${entry.file}。`);
-      const hfov = entry.hfov ?? meta.hfov;
-      if (hfov == null) throw new Error(`${entry.file} 沒有視角（hfov）。`);
-      const blob = new Blob([data], { type: entry.file.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg" });
-      const bitmap = await createImageBitmap(blob);
-      const roll = entry.roll || 0;
-      loaded.push({
-        name: entry.file.split("/").pop(), blob, hfov, width: bitmap.width, height: bitmap.height,
-        azimuth: entry.azimuth, elevation: entry.elevation, roll, priority: entry.priority || 0,
-        basis: basis(entry.azimuth, entry.elevation, roll),
-      });
-      bitmap.close();
-    }
-    shots.splice(0, shots.length, ...loaded);
-    $("loaded").textContent = `已讀入 ${loaded.length} 張照片。`;
-    refresh();
-  } catch (error) {
-    $("loaded").textContent = error.message || String(error);
-  }
-}
-
-let aligner = null, polyhedra = null;
-
-function showPhotoInfo() {
-  const a = aligner;
-  if (!a) return;
-  const s = a.shots[a.selected];
-  $("photoInfo").textContent = s ? `選取：${s.name || "照片 " + (a.selected + 1)}` : "點一下畫面，選取負責那一塊的照片。";
-  $("photoFields").hidden = $("orderRow").hidden = !s;
-  if (s) {
-    const digits = { azimuth: 2, elevation: 2, roll: 2, hfov: 2, priority: 0 };
-    document.querySelectorAll("[data-field]").forEach((input) => {
-      // 正在輸入的欄位不要被覆蓋
-      if (input !== document.activeElement) input.value = Number(s[input.dataset.field] || 0).toFixed(digits[input.dataset.field]);
-    });
-  }
-  $("vertexInfo").textContent = a.vertex < 0 ? `共 ${a.order.length} 個頂點` : `頂點 ${a.vertex + 1} / ${a.order.length}`;
-}
-
-function setMode(mode) {
-  aligner.mode = mode;
-  $("modeView").setAttribute("aria-pressed", mode === "view");
-  $("modeAdjust").setAttribute("aria-pressed", mode === "adjust");
-}
-
-async function openAlign() {
-  $("align").hidden = false;
-  document.body.style.overflow = "hidden";
-  $("alignStatus").textContent = "載入照片…";
-  try {
-    if (!polyhedra) polyhedra = await (await fetch("polyhedra.json")).json();
-    const level = $("level").value;
-    aligner = new Aligner($("gl"), $("overlay"), shots, polyhedra[level], Number(level));
-    aligner.onchange = showPhotoInfo;
-    await aligner.init((i, n) => { $("alignStatus").textContent = `載入照片 ${i + 1} / ${n}…`; });
-    aligner.attach();
-    aligner.translucent = $("translucent").checked;
-    aligner.showMesh = $("showMesh").checked;
-    aligner.allFov = $("allFov").checked;
-    setMode("view");
-    $("alignStatus").textContent = "";
-    aligner.goToVertex(1);
-  } catch (error) {
-    $("alignStatus").textContent = error.message || String(error);
-  }
-}
-
-function closeAlign() {
-  $("align").hidden = true;
-  document.body.style.overflow = "";
-  if (aligner && aligner.gl) aligner.gl.getExtension("WEBGL_lose_context")?.loseContext();
-  // 換上新的畫布，下次開啟時才能重新取得 WebGL
-  for (const id of ["gl", "overlay"]) $(id).replaceWith($(id).cloneNode(false));
-  aligner = null;
-  refresh();
-}
-
-// 微調的角度（度）
-function stepSize(e) {
-  return Math.max(0.01, Number($("step").value) || 0.2) * (e && e.shiftKey ? 5 : 1);
-}
-
-function alignKey(e) {
-  if (!aligner || $("align").hidden || e.target.tagName === "INPUT") return;
-  const step = stepSize(e);
-  let action = {
-    ArrowLeft: () => aligner.nudge(-step, 0), ArrowRight: () => aligner.nudge(step, 0),
-    ArrowUp: () => aligner.nudge(0, step), ArrowDown: () => aligner.nudge(0, -step),
-    "[": () => aligner.roll(-step), "{": () => aligner.roll(-step), "]": () => aligner.roll(step), "}": () => aligner.roll(step),
-    "-": () => aligner.widen(-step), "_": () => aligner.widen(-step), "=": () => aligner.widen(step), "+": () => aligner.widen(step),
-  }[e.key];
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") action = () => aligner.undo();
-  if (!action) return;
-  e.preventDefault();
-  action();
-}
-
-$("start").addEventListener("click", start);
-$("shutter").addEventListener("click", shoot);
-$("undo").addEventListener("click", () => { shots.pop(); refresh(); });
-$("download").addEventListener("click", download);
-$("zip").addEventListener("change", loadZip);
-$("make").addEventListener("click", make);
-$("openAlign").addEventListener("click", openAlign);
-$("alignDone").addEventListener("click", closeAlign);
-$("alignDownload").addEventListener("click", download);
-$("alignUndo").addEventListener("click", () => aligner && aligner.undo());
-$("alignReset").addEventListener("click", () => aligner && aligner.resetSelected());
-$("modeView").addEventListener("click", () => aligner && setMode("view"));
-$("modeAdjust").addEventListener("click", () => aligner && setMode("adjust"));
-$("prevVertex").addEventListener("click", () => aligner && aligner.goToVertex(-1));
-$("nextVertex").addEventListener("click", () => aligner && aligner.goToVertex(1));
-$("translucent").addEventListener("change", (e) => { if (aligner) { aligner.translucent = e.target.checked; aligner.draw(); } });
-$("showMesh").addEventListener("change", (e) => { if (aligner) { aligner.showMesh = e.target.checked; aligner.draw(); } });
-$("allFov").addEventListener("change", (e) => { if (aligner) aligner.allFov = e.target.checked; });
-document.querySelectorAll("[data-nudge]").forEach((b) => b.addEventListener("click", (e) => {
-  const [x, y] = b.dataset.nudge.split(",").map(Number), step = stepSize(e);
-  if (aligner) aligner.nudge(x * step, y * step);
-}));
-document.querySelectorAll("[data-roll]").forEach((b) => b.addEventListener("click", (e) => aligner && aligner.roll(Number(b.dataset.roll) * stepSize(e))));
-document.querySelectorAll("[data-zoom]").forEach((b) => b.addEventListener("click", (e) => aligner && aligner.widen(Number(b.dataset.zoom) * stepSize(e))));
-document.querySelectorAll("[data-field]").forEach((input) => input.addEventListener("change", () => {
-  if (aligner) aligner.setValue(input.dataset.field, Number(input.value));
-  showPhotoInfo();
-}));
-$("toFront").addEventListener("click", () => aligner && aligner.arrange("front"));
-$("toBack").addEventListener("click", () => aligner && aligner.arrange("back"));
-$("autoOrder").addEventListener("click", () => aligner && aligner.arrange("auto"));
-document.addEventListener("keydown", alignKey);
-window.addEventListener("resize", () => aligner && aligner.resize());
-</script>
+<script src="app.js"></script>
 </body>
 </html>

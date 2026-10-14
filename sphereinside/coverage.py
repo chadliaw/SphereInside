@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .messages import t
+
 _BIN = 30  # 回報缺漏位置時的格子大小（度）
 _MAX_LINES = 12
 
@@ -22,7 +24,7 @@ def _percent(x, digits=0):
     k = 10 ** digits
     floored = np.floor(x * 100 * k) / k
     if floored == 0 and x > 0:
-        return f"不到 {1 / k:g}%"
+        return t("less_than", x=f"{1 / k:g}")
     return f"{floored:.{digits}f}%"
 
 
@@ -37,12 +39,12 @@ class CoverageReport:
 
     def describe(self):
         if self.complete:
-            return "照片已涵蓋所有方向。"
-        lines = [f"照片涵蓋了 {_percent(self.fraction, 2)} 的方向，以下範圍還沒拍到："]
+            return t("coverage_complete")
+        lines = [t("coverage_partial", percent=_percent(self.fraction, 2))]
         for az, el, frac in self.missing[:_MAX_LINES]:
-            lines.append(f"  方位 {az:3d}°–{az + _BIN:3d}°、仰角 {el:+3d}°–{el + _BIN:+3d}°（缺 {_percent(frac)}）")
+            lines.append(t("coverage_cell", az0=az, az1=az + _BIN, el0=el, el1=el + _BIN, percent=_percent(frac)))
         if len(self.missing) > _MAX_LINES:
-            lines.append(f"  …以及另外 {len(self.missing) - _MAX_LINES} 個範圍")
+            lines.append(t("coverage_more", n=len(self.missing) - _MAX_LINES))
         return "\n".join(lines)
 
 

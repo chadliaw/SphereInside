@@ -67,6 +67,14 @@ class CameraTest(unittest.TestCase):
         far = np.array([[np.cos(np.radians(-25)), -np.sin(np.radians(-25)), 0]])
         self.assertEqual(PhotoSet([a, b]).sample(far)[0][0, 0], 10)
 
+    def test_crop(self):
+        photo = render_photo(scene, 0, 0, 60, 100, 100)
+        center = np.array([[1.0, 0, 0]])
+        right_edge = photo.pixel_to_direction(95, 50)[None]
+        self.assertTrue(PhotoSet([photo]).covered(np.vstack([center, right_edge])).all())
+        photo.crop = (0.0, 0.0, 0.6, 1.0)
+        self.assertEqual(PhotoSet([photo]).covered(np.vstack([center, right_edge])).tolist(), [True, False])
+
     def test_behind_camera_is_not_covered(self):
         photos = PhotoSet([render_photo(scene, 0, 0, 60, 80, 80)])
         self.assertFalse(photos.covered(np.array([[-1.0, 0, 0], [0, 1.0, 0]])).any())

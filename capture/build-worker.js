@@ -3,15 +3,21 @@
 "use strict";
 
 const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/";
-const SOURCES = ["__init__.py", "__main__.py", "camera.py", "coverage.py", "export.py", "paint.py", "polyhedron.py", "synthetic.py", "unfold.py"];
+const SOURCES = ["__init__.py", "__main__.py", "camera.py", "coverage.py", "export.py", "messages.py", "paint.py", "polyhedron.py", "synthetic.py", "unfold.py"];
 
 importScripts(PYODIDE + "pyodide.js");
+
+const MESSAGES = {
+  zh: { loading: "載入執行環境（第一次需要下載約 30 MB）…", starting: "開始合成…", noMeta: "找不到 meta.json" },
+  en: { loading: "Loading the runtime (about 30 MB the first time)…", starting: "Building…", noMeta: "meta.json not found" },
+};
+let messages = MESSAGES.zh;
 
 const say = (text) => self.postMessage({ type: "log", text });
 let ready = null;
 
 async function setup() {
-  say("載入執行環境（第一次需要下載約 30 MB）…");
+  say(messages.loading);
   const pyodide = await loadPyodide({ indexURL: PYODIDE });
   pyodide.setStdout({ batched: say });
   pyodide.setStderr({ batched: say });
@@ -33,7 +39,7 @@ async function setup() {
 const PREPARE = `
 import io, os, shutil, zipfile
 
-def prepare(files, archive):
+def prepare(files, archive, missing):
     shutil.rmtree("/work", ignore_errors=True)
     os.makedirs("/work")
     if archive is not None:
@@ -47,19 +53,20 @@ def prepare(files, archive):
         with open("/work/" + os.path.basename(name), "wb") as f:
             f.write(bytes(data))
     if not os.path.exists("/work/meta.json"):
-        raise ValueError("找不到 meta.json")
+        raise ValueError(missing)
 `;
 
 async function build(job) {
+  messages = MESSAGES[job.lang] || MESSAGES.zh;
   ready = ready || setup().catch((error) => { ready = null; throw error; });
   const pyodide = await ready;
   pyodide.runPython(PREPARE);
   const prepare = pyodide.globals.get("prepare");
-  prepare(pyodide.toPy(job.files.map((f) => [f.name, f.data])), job.zip ? pyodide.toPy(job.zip) : undefined);
+  prepare(pyodide.toPy(job.files.map((f) => [f.name, f.data])), job.zip ? pyodide.toPy(job.zip) : undefined, messages.noMeta);
   prepare.destroy();
 
-  say("開始合成…");
-  const args = ["build", "/work/meta.json", "-o", "/work/out.pdf", ...job.args];
+  say(messages.starting);
+  const args = ["--lang", job.lang === "en" ? "en" : "zh", "build", "/work/meta.json", "-o", "/work/out.pdf", ...job.args];
   pyodide.globals.set("build_args", pyodide.toPy(args));
   const code = pyodide.runPython("from sphereinside.__main__ import main\nmain(list(build_args))");
   if (code !== 0) return self.postMessage({ type: "failed", code });

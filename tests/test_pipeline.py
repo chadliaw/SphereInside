@@ -88,6 +88,33 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(main(["build", meta, "-o", str(out), "--dpi", "50", "--allow-gaps"]), 0)
         self.assertTrue(out.exists())
 
+    def test_unused_and_cropped_photos(self):
+        entries = [dict(e) for e in self.entries]
+        for e in entries[:3]:
+            e["use"] = False
+        entries[3]["crop"] = [0.1, 0.2, 0.9, 0.8]
+        meta = self.write_meta(entries)
+        from sphereinside.camera import load_photos
+
+        photos = load_photos(meta)
+        self.assertEqual(len(photos.photos), len(entries) - 3)
+        self.assertEqual(photos.photos[0].crop, (0.1, 0.2, 0.9, 0.8))
+        entries[3]["crop"] = [0.5, 0, 0.4, 1]
+        self.assertEqual(main(["check", self.write_meta(entries)]), 2)
+
+    def test_english_messages(self):
+        import contextlib
+        import io
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(main(["--lang", "en", "check", self.write_meta(self.entries[:5])]), 1)
+        self.assertIn("Not yet covered", out.getvalue())
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            main(["check", self.write_meta(self.entries[:5])])
+        self.assertIn("還沒拍到", out.getvalue())
+
     def test_missing_hfov(self):
         path = self.dir / "meta.json"
         path.write_text(json.dumps({"photos": self.entries[:1]}), encoding="utf-8")

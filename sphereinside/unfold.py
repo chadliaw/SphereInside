@@ -13,6 +13,10 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .messages import t as _t
+
+LABEL_MODES = ("inside", "outside", "none")  # 邊的編號：放在面上、放在圖片外、不標示
+_MIN_LABEL = 1.0  # 編號最小的字高（公釐）
 _TAB_SLOPE = 1.0  # 黏貼耳兩端內縮量與高度的比（1 即 45°）
 # 黏貼耳佔邊的哪一段；整段放不下時改放在其中一端
 _TAB_SPANS = ((0, 1), (0.3, 1), (0, 0.7), (0.55, 1), (0, 0.45))
@@ -24,6 +28,7 @@ class Label:
     along: np.ndarray  # 文字方向（沿著邊）
     text: str
     size: float  # 字高（公釐）
+    on_face: bool = True  # 是否壓在圖片上
 
 
 @dataclass
@@ -41,6 +46,7 @@ class _Piece:
     folds: list = field(default_factory=list)
     cuts: list = field(default_factory=list)
     labels: list = field(default_factory=list)
+    boxes: list = field(default_factory=list)  # 放在圖片外的編號所佔的範圍
 
 
 def _edge_key(i, j):
@@ -114,7 +120,7 @@ def _grow(V, S, edges, w, h):
         seed = min(unplaced, key=lambda f: (sum(g in unplaced for g in neighbours[f]), f))
         tri = _first_triangle(V[S[seed]])
         if not _fits(tri.min(0), tri.max(0), w, h):
-            raise ValueError("單一個面就放不進紙張，請縮小直徑、增加細分輪數或改用較大的紙張")
+            raise ValueError(_t("face_too_large"))
         unplaced.discard(seed)
         tris = {seed: tri}
         lo, hi = tri.min(0), tri.max(0)
@@ -149,10 +155,22 @@ def _tab_quad(a, b, height):
     return np.array([a, b, b - u * inset + n * height, a + u * inset + n * height])
 
 
-def _decorate(S, edges, pieces, joined, tab):
-    """加上摺線、裁切線、黏貼耳與邊的編號。回傳黏貼耳數與剪開的邊數。"""
+def _label_box(pos, u, n, text, size):
+    """編號佔用的範圍（兩個三角形），用來檢查是否與其他東西重疊。"""
+    half_w = (0.6 * size * len(text) + 0.6) / 2
+    half_h = size * 0.55 + 0.3
+    c = [pos + u * x * half_w + n * y * half_h for x, y in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+    return [np.array([c[0], c[1], c[2]]), np.array([c[0], c[2], c[3]])]
+
+
+def _decorate(S, edges, pieces, joined, tab, labels):
+    """加上摺線、裁切線、黏貼耳與邊的編號。
+
+    回傳 (黏貼耳數, 剪開的邊數, 因為圖片外放不下而省略的編號數)。
+    """
     owner = {f: p for p in pieces for f in p.tris}
     number = 0
+    pending = []  # 黏貼耳全部決定之後才放編號，編號才不會被之後的黏貼耳蓋住
     for key in sorted(edges):
         (f, kf), (g, kg) = edges[key]
         if key in joined:
@@ -181,22 +199,49 @@ def _decorate(S, edges, pieces, joined, tab):
             p = owner[x]
             a, b = ends[s]
             u = (b - a) / length
-            n = np.array([u[1], -u[0]])
+            n = np.array([u[1], -u[0]])  # 朝面的外側
             if s == tab_side:
                 quad = p.tabs[-1][1]
                 p.folds.append(np.array([a, b]))
                 p.cuts += [quad[[0, 3]], quad[[3, 2]], quad[[2, 1]]]
                 p.cuts += [seg for seg in (np.array([a, quad[0]]), np.array([quad[1], b])) if np.linalg.norm(seg[1] - seg[0]) > 1e-9]
+                # 黏貼耳上的編號本來就在圖片外；耳太小、字放不下時，改用另一側的放法
                 depth = (quad[3] - quad[0]) @ n
-                p.labels.append(Label((quad[0] + quad[1]) / 2 + n * depth / 2, u, str(number), min(size, depth * 0.6)))
+                text = str(number)
+                fit = min(size, (depth - 0.6) / 1.1, (np.linalg.norm(quad[2] - quad[3]) - 0.6) / (0.6 * len(text)))
+                if fit >= _MIN_LABEL:
+                    pending.append((p, Label((quad[0] + quad[1]) / 2 + n * depth / 2, u, text, fit, False), None))
+                else:
+                    pending.append((p, Label((a + b) / 2 - n * size * 0.9, u, text, size), (a, b, u, n)))
             else:
                 p.cuts.append(np.array([a, b]))
-                p.labels.append(Label((a + b) / 2 - n * size * 0.9, u, str(number), size))
-    return sum(len(p.tabs) for p in pieces), number
+                pending.append((p, Label((a + b) / 2 - n * size * 0.9, u, str(number), size), (a, b, u, n)))
+
+    omitted = 0
+    if labels == "none":
+        return sum(len(p.tabs) for p in pieces), number, omitted
+    for p, label, edge in pending:
+        if labels == "outside" and edge is not None:
+            a, b, u, n = edge
+            obstacles = list(p.tris.values()) + [t for _, q in p.tabs for t in (q[[0, 1, 2]], q[[0, 2, 3]])] + p.boxes
+            for k, t, gap in itertools.product((1.0, 0.75, 0.55), (0.5, 0.35, 0.65, 0.2, 0.8, 0.1, 0.9), (0.5, 0.15)):
+                size = max(_MIN_LABEL, label.size * k)
+                pos = a + (b - a) * t + n * (gap + size * 0.55 + 0.3)
+                box = _label_box(pos, u, n, label.text, size)
+                if not any(_overlaps(tri, obstacles) for tri in box):
+                    label = Label(pos, u, label.text, size, False)
+                    p.boxes += box
+                    break
+            else:
+                # 不壓到圖片：放不下就省略。這多半發生在同一片的狹窄缺口裡，對面就是成對的邊
+                omitted += 1
+                continue
+        p.labels.append(label)
+    return sum(len(p.tabs) for p in pieces), number, omitted
 
 
 def _bounds(piece):
-    pts = np.vstack(list(piece.tris.values()) + [q for _, q in piece.tabs])
+    pts = np.vstack(list(piece.tris.values()) + [q for _, q in piece.tabs] + piece.boxes)
     return pts.min(0), pts.max(0)
 
 
@@ -210,7 +255,7 @@ def _pack(pieces, w, h, margin, gap):
         if rotate:
             size = size[::-1]
         if size[0] > w + 1e-6 or size[1] > h + 1e-6:
-            raise ValueError("展開圖的一片放不進紙張")
+            raise ValueError(_t("piece_too_large"))
         items.append((p, lo, hi, rotate, size))
     items.sort(key=lambda it: -it[4][1])
 
@@ -253,20 +298,23 @@ def _pack(pieces, w, h, margin, gap):
         page.faces += [(f, T(t)) for f, t in sorted(p.tris.items())]
         page.folds += [T(s) for s in p.folds]
         page.cuts += [T(s) for s in p.cuts]
-        page.labels += [Label(T(l.pos), l.along @ R.T, l.text, l.size) for l in p.labels]
+        page.labels += [Label(T(l.pos), l.along @ R.T, l.text, l.size, l.on_face) for l in p.labels]
     return layouts
 
 
-def unfold(V, S, page_width, page_height, margin=8.0, tab=5.0, gap=3.0):
+def unfold(V, S, page_width, page_height, margin=8.0, tab=5.0, gap=3.0, labels="inside"):
     """把多面體展開並排進頁面。V 的單位是公釐。
 
-    回傳每一頁的 PageLayout，以及 (黏貼耳數, 剪開的邊數)；兩者不相等時，
-    表示有些邊因為空間不夠而沒有黏貼耳。
+    labels 是邊的編號放在哪裡：LABEL_MODES 其中之一。
+    回傳每一頁的 PageLayout，以及 (黏貼耳數, 剪開的邊數, 省略的編號數)；
+    前兩者不相等時，表示有些邊因為空間不夠而沒有黏貼耳。
     """
+    if labels not in LABEL_MODES:
+        raise ValueError(labels)
     S = np.asarray(S)
     edges = _edge_faces(S)
     w, h = page_width - 2 * margin, page_height - 2 * margin
     # 生長時預留黏貼耳的空間
     pieces, joined = _grow(V, S, edges, w - 2 * tab, h - 2 * tab)
-    counts = _decorate(S, edges, pieces, joined, tab)
+    counts = _decorate(S, edges, pieces, joined, tab, labels)
     return _pack(pieces, w, h, margin, gap), counts

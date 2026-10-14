@@ -1,5 +1,6 @@
-// 手動對齊：從球心往外看，拖曳照片來修正它的方位、仰角、傾斜與視角。
-// 需要 index.html 裡的 basis、paramsFromBasis、dot、cross 與 RAD。
+// 手動對齊與拼貼：從球心往外看，拖曳照片來修正它的方位、仰角、傾斜與視角，
+// 選擇要用哪些照片、誰蓋在上面，以及剪裁。
+// 需要 app.js 裡的 basis、paramsFromBasis、dot、cross 與 RAD，以及 i18n.js 的 t。
 "use strict";
 
 const VERTEX_SHADER = `#version 300 es
@@ -8,15 +9,17 @@ void main() {
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
-// 每個像素就是一個方向；與 Python 端相同，取鏡頭中心最接近該方向的照片
+// 每個像素就是一個方向；與 Python 端相同，取順序最大、再來是鏡頭中心最接近的照片
 const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 precision highp int;
 uniform mediump sampler2DArray photos;
-uniform highp sampler2D params;  // 每張照片一列：前、右、上、(tan 半寬, tan 半高, 順序)
+// 每張照片一列：前、右、上、(tan 半寬, tan 半高, 順序, 是否使用)、剪裁（左, 上, 右, 下）
+uniform highp sampler2D params;
 uniform int count;
 uniform int selected;
-uniform float overlayAlpha;
+uniform float overlayInside;   // 選取的照片疊在上面時，剪裁範圍內的不透明度
+uniform float overlayOutside;  // 剪裁範圍外的不透明度（剪裁時顯示被剪掉的部分）
 uniform vec3 viewF, viewR, viewU;
 uniform vec2 viewTan;
 uniform vec2 resolution;
@@ -24,6 +27,7 @@ uniform float layerHeight;
 out vec4 outColor;
 const float PRIORITY_WEIGHT = 10.0;  // 與 sphereinside/camera.py 相同
 
+// 方向 d 在照片 i 上的相對位置（0–1）；在鏡頭後方時回傳 false
 bool project(int i, vec3 d, out vec2 uv, out float c) {
   vec3 f = texelFetch(params, ivec2(0, i), 0).xyz;
   c = dot(d, f);
@@ -32,7 +36,11 @@ bool project(int i, vec3 d, out vec2 uv, out float c) {
   vec3 u = texelFetch(params, ivec2(2, i), 0).xyz;
   vec2 t = texelFetch(params, ivec2(3, i), 0).xy;
   uv = vec2(0.5 + dot(d, r) / c / (2.0 * t.x), 0.5 - dot(d, u) / c / (2.0 * t.y));
-  return all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0)));
+  return true;
+}
+
+bool within(vec2 uv, vec4 box) {
+  return uv.x >= box.x && uv.y >= box.y && uv.x <= box.z && uv.y <= box.w;
 }
 
 vec3 photo(int i, vec2 uv) {
@@ -44,22 +52,27 @@ vec3 photo(int i, vec2 uv) {
 void main() {
   vec2 ndc = gl_FragCoord.xy / resolution * 2.0 - 1.0;
   vec3 d = normalize(viewF + ndc.x * viewTan.x * viewR + ndc.y * viewTan.y * viewU);
+  bool overlay = selected >= 0 && (overlayInside > 0.0 || overlayOutside > 0.0);
   int best = -1;
   float bestScore = -1e9;
   vec2 bestUv = vec2(0.0);
   for (int i = 0; i < count; i++) {
-    if (i == selected && overlayAlpha > 0.0) continue;  // 半透明時，底下顯示其他照片
+    vec4 p = texelFetch(params, ivec2(3, i), 0);
+    if (p.w < 0.5 || (overlay && i == selected)) continue;  // 沒用到的照片不畫；疊在上面的另外畫
     vec2 uv;
     float c;
-    if (!project(i, d, uv, c)) continue;
-    float score = texelFetch(params, ivec2(3, i), 0).z * PRIORITY_WEIGHT + c;
+    if (!project(i, d, uv, c) || !within(uv, texelFetch(params, ivec2(4, i), 0))) continue;
+    float score = p.z * PRIORITY_WEIGHT + c;
     if (score > bestScore) { best = i; bestScore = score; bestUv = uv; }
   }
   vec3 color = best < 0 ? vec3(0.2, 0.22, 0.25) : photo(best, bestUv);
-  if (selected >= 0 && overlayAlpha > 0.0) {
+  if (overlay) {
     vec2 uv;
     float c;
-    if (project(selected, d, uv, c)) color = mix(color, photo(selected, uv), overlayAlpha);
+    if (project(selected, d, uv, c) && within(uv, vec4(0.0, 0.0, 1.0, 1.0))) {
+      float alpha = within(uv, texelFetch(params, ivec2(4, selected), 0)) ? overlayInside : overlayOutside;
+      color = mix(color, photo(selected, uv), alpha);
+    }
   }
   outColor = vec4(color, 1.0);
 }`;
@@ -67,9 +80,13 @@ void main() {
 const TEXTURE_BUDGET = 96e6;  // 所有照片在顯示卡上的大小上限（位元組）
 const VIEW_FOV = { 0: 120, 1: 95, 2: 70 };  // 檢視頂點時的視角，夠看到周圍一圈的面
 const PRIORITY_WEIGHT = 10;  // 順序的權重，與 sphereinside/camera.py 相同
+const THUMB_HEIGHT = 120;
+const MIN_CROP = 0.05;  // 剪裁後至少保留的寬度或高度（比例）
+const PARAM_COLUMNS = 5;
 
 const norm = (v) => { const n = Math.hypot(v[0], v[1], v[2]); return [v[0] / n, v[1] / n, v[2] / n]; };
 const add = (a, b, k = 1) => [a[0] + k * b[0], a[1] + k * b[1], a[2] + k * b[2]];
+const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
 // 繞單位向量 axis 旋轉 angle（弧度）
 function rotate(v, axis, angle) {
@@ -91,11 +108,29 @@ function setBasis(shot, fwd, right) {
   shot.basis = basis(shot.azimuth, shot.elevation, shot.roll);
 }
 
+// 方向 d 在照片上的相對位置 [u, v]（0–1，未剪裁）；在鏡頭後方時回傳 null
+function photoUv(shot, d) {
+  const b = shot.basis, c = dot(d, b.fwd), t = tanHalf(shot);
+  if (c <= 1e-4) return null;
+  return [0.5 + dot(d, b.right) / c / (2 * t[0]), 0.5 - dot(d, b.up) / c / (2 * t[1])];
+}
+
+// 照片上相對位置 [u, v] 的方向
+function photoDirection(shot, u, v) {
+  const b = shot.basis, t = tanHalf(shot);
+  return add(add(b.fwd, b.right, (2 * u - 1) * t[0]), b.up, (1 - 2 * v) * t[1]);
+}
+
 class Aligner {
   constructor(canvas, overlay, shots, mesh, level) {
     this.canvas = canvas;
     this.overlay = overlay;
     this.shots = shots;
+    for (const s of shots) {
+      if (s.use === undefined) s.use = true;
+      if (!s.crop) s.crop = [0, 0, 1, 1];
+      if (!s.priority) s.priority = 0;
+    }
     this.view = { azimuth: 0, elevation: 0, fov: VIEW_FOV[level] || 90 };
     this.selected = -1;
     this.mode = "view";
@@ -107,6 +142,7 @@ class Aligner {
     this.pointers = new Map();
     this.gesture = null;
     this.onchange = () => {};
+    this.onview = () => {};
 
     // 印在外側時取色方向會鏡射，所以這裡把多面體也鏡射，才看得出哪一塊會落在哪個面上
     this.vertices = mesh.V.map((v) => [v[0], -v[1], v[2]]);
@@ -130,7 +166,7 @@ class Aligner {
 
   async init(progress) {
     const gl = this.canvas.getContext("webgl2", { antialias: false, preserveDrawingBuffer: true });
-    if (!gl) throw new Error("這個瀏覽器不支援 WebGL 2，無法顯示對齊畫面。");
+    if (!gl) throw new Error(t("align.noWebgl"));
     this.gl = gl;
     this.program = this.compile();
     gl.bindVertexArray(gl.createVertexArray());
@@ -152,10 +188,19 @@ class Aligner {
     scratch.height = h;
     const ctx = scratch.getContext("2d");
     ctx.imageSmoothingQuality = "high";
+    const thumb = document.createElement("canvas");
+    const thumbCtx = thumb.getContext("2d");
     for (let i = 0; i < n; i++) {
       progress(i, n);
-      const bitmap = await createImageBitmap(this.shots[i].blob);
+      const s = this.shots[i];
+      const bitmap = await createImageBitmap(s.blob);
       ctx.drawImage(bitmap, 0, 0, w, h);
+      if (!s.thumb) {
+        thumb.height = THUMB_HEIGHT;
+        thumb.width = Math.round(THUMB_HEIGHT * bitmap.width / bitmap.height);
+        thumbCtx.drawImage(bitmap, 0, 0, thumb.width, thumb.height);
+        s.thumb = thumb.toDataURL("image/jpeg", 0.75);
+      }
       bitmap.close();
       gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, i, w, h, 1, gl.RGBA, gl.UNSIGNED_BYTE, scratch);
     }
@@ -168,7 +213,7 @@ class Aligner {
     this.paramTexture = gl.createTexture();
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.paramTexture);
-    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, 4, n);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, PARAM_COLUMNS, n);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     this.uploadParams();
@@ -191,7 +236,7 @@ class Aligner {
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
     gl.useProgram(p);
     this.uniforms = {};
-    for (const name of ["photos", "params", "count", "selected", "overlayAlpha", "viewF", "viewR", "viewU", "viewTan", "resolution", "layerHeight"]) {
+    for (const name of ["photos", "params", "count", "selected", "overlayInside", "overlayOutside", "viewF", "viewR", "viewU", "viewTan", "resolution", "layerHeight"]) {
       this.uniforms[name] = gl.getUniformLocation(p, name);
     }
     gl.uniform1i(this.uniforms.photos, 0);
@@ -200,14 +245,14 @@ class Aligner {
   }
 
   uploadParams() {
-    const data = new Float32Array(this.shots.length * 16);
+    const row = PARAM_COLUMNS * 4, data = new Float32Array(this.shots.length * row);
     this.shots.forEach((s, i) => {
       const b = s.basis, t = tanHalf(s);
-      data.set([...b.fwd, 0, ...b.right, 0, ...b.up, 0, t[0], t[1], s.priority || 0, 0], i * 16);
+      data.set([...b.fwd, 0, ...b.right, 0, ...b.up, 0, t[0], t[1], s.priority || 0, s.use === false ? 0 : 1, ...s.crop], i * row);
     });
     const gl = this.gl;
     gl.activeTexture(gl.TEXTURE1);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 4, this.shots.length, gl.RGBA, gl.FLOAT, data);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, PARAM_COLUMNS, this.shots.length, gl.RGBA, gl.FLOAT, data);
   }
 
   resize() {
@@ -246,10 +291,11 @@ class Aligner {
   pick(d) {
     let best = -1, bestScore = -Infinity;
     this.shots.forEach((s, i) => {
-      const b = s.basis, c = dot(d, b.fwd), t = tanHalf(s);
-      if (c <= 1e-4) return;
-      const score = (s.priority || 0) * PRIORITY_WEIGHT + c;
-      if (score > bestScore && Math.abs(dot(d, b.right) / c) <= t[0] && Math.abs(dot(d, b.up) / c) <= t[1]) {
+      if (s.use === false) return;
+      const uv = photoUv(s, d);
+      if (!uv || uv[0] < s.crop[0] || uv[1] < s.crop[1] || uv[0] > s.crop[2] || uv[1] > s.crop[3]) return;
+      const score = (s.priority || 0) * PRIORITY_WEIGHT + dot(d, s.basis.fwd);
+      if (score > bestScore) {
         best = i;
         bestScore = score;
       }
@@ -265,15 +311,23 @@ class Aligner {
     requestAnimationFrame(() => {
       this.pending = false;
       this.render();
+      this.onview();
     });
   }
 
   render() {
     const gl = this.gl, u = this.uniforms, v = this.viewBasis();
+    const s = this.shots[this.selected];
+    // 預覽還沒貼上的照片、半透明模式、剪裁模式時，選取的照片疊在最上面
+    let inside = 0, outside = 0;
+    if (s && this.mode === "crop") { inside = 0.85; outside = 0.3; }
+    else if (s && s.use === false) inside = 0.65;
+    else if (s && this.translucent) inside = 0.5;
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.uniform1i(u.count, this.shots.length);
     gl.uniform1i(u.selected, this.selected);
-    gl.uniform1f(u.overlayAlpha, this.translucent && this.selected >= 0 ? 0.5 : 0);
+    gl.uniform1f(u.overlayInside, inside);
+    gl.uniform1f(u.overlayOutside, outside);
     gl.uniform3fv(u.viewF, v.fwd);
     gl.uniform3fv(u.viewR, v.right);
     gl.uniform3fv(u.viewU, v.up);
@@ -296,10 +350,15 @@ class Aligner {
       const p = this.toScreen(a, v), q = this.toScreen(b, v);
       if (p && q) { g.moveTo(p[0], p[1]); g.lineTo(q[0], q[1]); }
     };
+    const box = (s, [u0, v0, u1, v1]) => {
+      const c = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]].map(([x, y]) => photoDirection(s, x, y));
+      for (let k = 0; k < 4; k++) segment(c[k], c[(k + 1) % 4]);
+    };
     if (this.showMesh) {
       g.beginPath();
       for (const [a, b] of this.edges) segment(this.vertices[a], this.vertices[b]);
       // 深色襯底，白牆上也看得清楚
+      g.setLineDash([]);
       g.strokeStyle = "rgba(0,0,0,0.35)";
       g.lineWidth = 3 * scale;
       g.stroke();
@@ -320,13 +379,23 @@ class Aligner {
         }
       }
     }
-    if (this.selected >= 0) {
-      const s = this.shots[this.selected], b = s.basis, t = tanHalf(s);
-      const corners = [[-1, 1], [1, 1], [1, -1], [-1, -1]].map(([x, y]) => add(add(b.fwd, b.right, x * t[0]), b.up, y * t[1]));
+    const s = this.shots[this.selected];
+    if (s) {
+      const color = s.use === false ? "#56ccf2" : "#f2c94c";
+      // 整張照片的範圍用虛線，剪裁後保留的範圍用實線
+      if (s.crop.some((x, k) => x !== [0, 0, 1, 1][k])) {
+        g.beginPath();
+        box(s, [0, 0, 1, 1]);
+        g.setLineDash([6 * scale, 5 * scale]);
+        g.strokeStyle = color;
+        g.lineWidth = 1.2 * scale;
+        g.stroke();
+        g.setLineDash([]);
+      }
       g.beginPath();
-      for (let k = 0; k < 4; k++) segment(corners[k], corners[(k + 1) % 4]);
-      g.strokeStyle = "#f2c94c";
-      g.lineWidth = 2.5 * scale;
+      box(s, s.crop);
+      g.strokeStyle = color;
+      g.lineWidth = (this.mode === "crop" ? 3.5 : 2.5) * scale;
       g.stroke();
     }
   }
@@ -334,11 +403,11 @@ class Aligner {
   // ---- 修改照片 -------------------------------------------------------------
 
   snapshotOf(s) {
-    return [s.azimuth, s.elevation, s.roll, s.hfov, s.priority || 0];
+    return [s.azimuth, s.elevation, s.roll, s.hfov, s.priority || 0, s.use !== false, [...s.crop]];
   }
 
-  restore(s, [azimuth, elevation, roll, hfov, priority]) {
-    Object.assign(s, { azimuth, elevation, roll, hfov, priority, basis: basis(azimuth, elevation, roll) });
+  restore(s, [azimuth, elevation, roll, hfov, priority, use, crop]) {
+    Object.assign(s, { azimuth, elevation, roll, hfov, priority, use, crop: [...crop], basis: basis(azimuth, elevation, roll) });
   }
 
   remember() {
@@ -359,10 +428,13 @@ class Aligner {
     this.changed();
   }
 
+  // 方向、視角、順序與剪裁回到開啟時的樣子；是否使用維持不變
   resetSelected() {
     if (this.selected < 0) return;
+    const s = this.shots[this.selected], use = s.use;
     this.remember();
-    this.restore(this.shots[this.selected], this.original[this.selected]);
+    this.restore(s, this.original[this.selected]);
+    s.use = use;
     this.changed();
   }
 
@@ -395,7 +467,7 @@ class Aligner {
   widen(delta) {
     if (this.selected < 0) return;
     const h = this.shots[this.selected].hfov;
-    const target = Math.max(1, Math.min(170, h + delta));
+    const target = clamp(h + delta, 1, 170);
     this.remember();
     this.zoom(Math.tan(target * RAD / 2) / Math.tan(h * RAD / 2));
     this.changed();
@@ -407,12 +479,12 @@ class Aligner {
     const s = this.shots[this.selected];
     this.remember();
     if (field === "hfov") {
-      value = Math.max(1, Math.min(170, value));
+      value = clamp(value, 1, 170);
       for (const x of this.allFov ? this.shots : [s]) x.hfov = value;
     } else if (field === "priority") {
       s.priority = value;
     } else {
-      s[field] = field === "elevation" ? Math.max(-90, Math.min(90, value)) : value;
+      s[field] = field === "elevation" ? clamp(value, -90, 90) : value;
       s.basis = basis(s.azimuth, s.elevation, s.roll);
     }
     this.changed();
@@ -433,11 +505,49 @@ class Aligner {
     for (const i of targets) setTanHalf(this.shots[i], (from ? from[i] : tanHalf(this.shots[i])[0]) * factor);
   }
 
+  // 加入或移出拼貼；剛貼上的照片放在最上層
+  setUse(i, use) {
+    const s = this.shots[i];
+    this.remember();
+    s.use = use;
+    if (use) s.priority = Math.max(0, ...this.shots.filter((x, k) => k !== i && x.use !== false).map((x) => x.priority || 0)) + 1;
+    this.changed();
+  }
+
+  // 全部加入或全部移出（從空白開始）
+  setAll(use) {
+    this.remember();
+    for (const s of this.shots) {
+      s.use = use;
+      s.priority = 0;
+    }
+    this.changed();
+  }
+
+  // 設定剪裁的一邊：edge 是 0 左、1 上、2 右、3 下，value 是 0–1 的比例
+  setCrop(edge, value, remember = true) {
+    if (this.selected < 0 || !Number.isFinite(value)) return;
+    const c = this.shots[this.selected].crop;
+    if (remember) this.remember();
+    if (edge === 0) c[0] = clamp(value, 0, c[2] - MIN_CROP);
+    if (edge === 1) c[1] = clamp(value, 0, c[3] - MIN_CROP);
+    if (edge === 2) c[2] = clamp(value, c[0] + MIN_CROP, 1);
+    if (edge === 3) c[3] = clamp(value, c[1] + MIN_CROP, 1);
+    this.changed();
+  }
+
+  resetCrop() {
+    if (this.selected < 0) return;
+    this.remember();
+    this.shots[this.selected].crop = [0, 0, 1, 1];
+    this.changed();
+  }
+
   // ---- 檢視 ---------------------------------------------------------------
 
   lookAt(d) {
     this.view.azimuth = ((Math.atan2(-d[1], d[0]) / RAD) % 360 + 360) % 360;
-    this.view.elevation = Math.asin(Math.max(-1, Math.min(1, d[2]))) / RAD;
+    this.view.elevation = Math.asin(clamp(d[2], -1, 1)) / RAD;
   }
 
   goToVertex(step) {
@@ -449,7 +559,7 @@ class Aligner {
   }
 
   setFov(fov) {
-    this.view.fov = Math.max(20, Math.min(120, fov));
+    this.view.fov = clamp(fov, 20, 120);
     this.draw();
   }
 
@@ -475,7 +585,7 @@ class Aligner {
       if (!this.pointers.has(e.pointerId)) return;
       const g = this.gesture;
       if (g && g.kind !== "pinch" && this.pointers.size === 1 && !g.moved) {
-        if (g.kind === "photo") this.history.pop();  // 只是點一下，沒有移動
+        if (g.kind === "photo" || g.kind === "crop") this.history.pop();  // 只是點一下，沒有移動
         this.select(this.pick(this.directionAt(...g.start)));
       }
       this.pointers.delete(e.pointerId);
@@ -496,23 +606,36 @@ class Aligner {
     }, { passive: false });
   }
 
+  // 剪裁時要拖曳的邊：離按下的位置最近的那一邊（以角度計）
+  nearestCropEdge(uv) {
+    const s = this.shots[this.selected], c = s.crop, t = tanHalf(s);
+    const distances = [Math.abs(uv[0] - c[0]) * t[0], Math.abs(uv[1] - c[1]) * t[1], Math.abs(uv[0] - c[2]) * t[0], Math.abs(uv[1] - c[3]) * t[1]];
+    return distances.indexOf(Math.min(...distances));
+  }
+
   beginGesture() {
     const pts = [...this.pointers.values()];
-    const adjust = this.mode === "adjust" && this.selected >= 0;
+    const s = this.shots[this.selected];
+    let kind = "view";
+    if (s && this.mode === "adjust") kind = "photo";
+    if (s && this.mode === "crop") kind = "crop";
     if (pts.length === 1) {
-      const s = adjust ? this.shots[this.selected] : null;
-      if (adjust) this.remember();
+      const d0 = this.directionAt(...pts[0]);
+      if (kind !== "view") this.remember();
+      const uv = kind === "crop" ? photoUv(s, d0) : null;
+      if (kind === "crop" && !uv) kind = "view";
       this.gesture = {
-        kind: adjust ? "photo" : "view",
+        kind,
         start: pts[0],
         moved: false,
         view: { ...this.view },
         from: s ? [s.basis.fwd, s.basis.right] : null,
-        d0: this.directionAt(...pts[0]),
+        d0,
+        edge: uv ? this.nearestCropEdge(uv) : -1,
       };
     } else if (pts.length === 2) {
       const [a, b] = pts, mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-      const s = adjust ? this.shots[this.selected] : null;
+      const adjust = kind === "photo";
       if (adjust && !(this.gesture && this.gesture.kind === "photo")) this.remember();
       this.gesture = {
         kind: "pinch",
@@ -554,10 +677,13 @@ class Aligner {
       if (n < 1e-9) return;
       this.turnSelected(axis.map((x) => x / n), Math.atan2(n, dot(g.d0, d1)), g.from);
       this.changed();
+    } else if (g.kind === "crop") {
+      const uv = photoUv(this.shots[this.selected], this.directionAt(...p));
+      if (uv) this.setCrop(g.edge, uv[g.edge % 2], false);
     } else {
       const k = this.view.fov / this.canvas.clientHeight;
       this.view.azimuth = ((g.view.azimuth - (p[0] - g.start[0]) * k) % 360 + 360) % 360;
-      this.view.elevation = Math.max(-90, Math.min(90, g.view.elevation + (p[1] - g.start[1]) * k));
+      this.view.elevation = clamp(g.view.elevation + (p[1] - g.start[1]) * k, -90, 90);
       this.draw();
     }
   }

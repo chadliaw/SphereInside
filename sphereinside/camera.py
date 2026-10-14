@@ -13,6 +13,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageOps
 
+from .messages import t
+
 _EXIF_IFD = 0x8769
 _FOCAL_35MM = 0xA405
 _DIAGONAL_35MM = 43.267
@@ -39,6 +41,7 @@ class Photo:
     roll: float = 0.0
     name: str = ""
     priority: float = 0.0  # 順序：涵蓋同一個方向時，數字大的優先
+    crop: tuple = (0.0, 0.0, 1.0, 1.0)  # 剪裁後保留的範圍：左、上、右、下，以照片寬高的比例表示
     fwd: np.ndarray = field(init=False, repr=False)
     right: np.ndarray = field(init=False, repr=False)
     up: np.ndarray = field(init=False, repr=False)
@@ -81,7 +84,7 @@ class PhotoSet:
 
     def __init__(self, photos):
         if not photos:
-            raise ValueError("沒有照片")
+            raise ValueError(t("no_photos"))
         self.photos = list(photos)
 
     def _assign(self, dirs):
@@ -94,9 +97,16 @@ class PhotoSet:
         score = np.full(n, -np.inf)
         bu, bv = np.zeros(n), np.zeros(n)
         for i, p in enumerate(self.photos):
+            left, top, right, bottom = p.crop
             with np.errstate(invalid="ignore"):
                 u, v, c = p.direction_to_pixel(dirs)
-                inside = (c > 1e-9) & (u >= -0.5) & (u <= p.width - 0.5) & (v >= -0.5) & (v <= p.height - 0.5)
+                inside = (
+                    (c > 1e-9)
+                    & (u >= left * p.width - 0.5)
+                    & (u <= right * p.width - 0.5)
+                    & (v >= top * p.height - 0.5)
+                    & (v <= bottom * p.height - 0.5)
+                )
             # c 介於 0 與 1 之間，順序只要差 0.1 以上就優先
             s = p.priority * _PRIORITY_WEIGHT + c
             take = inside & (s > score)
@@ -147,19 +157,25 @@ def load_photos(meta_path, max_focal=None):
     """讀取對照檔與其中列出的照片。
 
     對照檔是 JSON：{"hfov": 預設視角, "photos": [{"file", "azimuth", "elevation",
-    "roll", "hfov", "priority"}, ...]}，角度以度為單位，檔案路徑相對於對照檔所在的資料夾。
+    "roll", "hfov", "priority", "crop", "use"}, ...]}，角度以度為單位，檔案路徑相對於對照檔所在的資料夾。
+    "use" 為 false 的照片不會讀入。
     max_focal 給定時，解析度超過需求的照片會先縮小，避免取樣時產生雜訊並節省記憶體。
     """
     meta_path = Path(meta_path)
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     photos = []
     for entry in meta["photos"]:
+        if entry.get("use", True) is False:
+            continue
+        crop = tuple(float(x) for x in entry.get("crop", (0, 0, 1, 1)))
+        if len(crop) != 4 or not (0 <= crop[0] < crop[2] <= 1 and 0 <= crop[1] < crop[3] <= 1):
+            raise ValueError(t("bad_crop", file=entry["file"]))
         with Image.open(meta_path.parent / entry["file"]) as raw:
             hfov = entry.get("hfov", meta.get("hfov"))
             if hfov is None:
                 hfov = _hfov_from_exif(raw)
             if hfov is None:
-                raise ValueError(f"{entry['file']}：對照檔沒有 hfov，照片的 EXIF 也沒有等效焦距")
+                raise ValueError(t("no_hfov", file=entry["file"]))
             img = ImageOps.exif_transpose(raw).convert("RGB")
         focal = (img.width / 2) / np.tan(np.radians(hfov) / 2)
         if max_focal and focal > max_focal:
@@ -173,6 +189,7 @@ def load_photos(meta_path, max_focal=None):
                 hfov=float(hfov),
                 roll=float(entry.get("roll", 0.0)),
                 priority=float(entry.get("priority", 0.0)),
+                crop=crop,
                 name=entry["file"],
             )
         )
