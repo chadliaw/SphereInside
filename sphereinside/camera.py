@@ -16,6 +16,7 @@ from PIL import Image, ImageOps
 _EXIF_IFD = 0x8769
 _FOCAL_35MM = 0xA405
 _DIAGONAL_35MM = 43.267
+_PRIORITY_WEIGHT = 10.0
 
 
 def basis(azimuth, elevation, roll=0.0):
@@ -37,6 +38,7 @@ class Photo:
     hfov: float  # 沿影像寬度方向的視角
     roll: float = 0.0
     name: str = ""
+    priority: float = 0.0  # 順序：涵蓋同一個方向時，數字大的優先
     fwd: np.ndarray = field(init=False, repr=False)
     right: np.ndarray = field(init=False, repr=False)
     up: np.ndarray = field(init=False, repr=False)
@@ -83,7 +85,10 @@ class PhotoSet:
         self.photos = list(photos)
 
     def _assign(self, dirs):
-        """每個方向取鏡頭中心最接近的那一張。回傳照片編號（−1 表示沒有涵蓋）與像素位置。"""
+        """每個方向取順序最大的那一張，順序相同時取鏡頭中心最接近的。
+
+        回傳照片編號（−1 表示沒有涵蓋）與像素位置。
+        """
         n = len(dirs)
         best = np.full(n, -1)
         score = np.full(n, -np.inf)
@@ -92,8 +97,10 @@ class PhotoSet:
             with np.errstate(invalid="ignore"):
                 u, v, c = p.direction_to_pixel(dirs)
                 inside = (c > 1e-9) & (u >= -0.5) & (u <= p.width - 0.5) & (v >= -0.5) & (v <= p.height - 0.5)
-            take = inside & (c > score)
-            best[take], score[take] = i, c[take]
+            # c 介於 0 與 1 之間，順序只要差 0.1 以上就優先
+            s = p.priority * _PRIORITY_WEIGHT + c
+            take = inside & (s > score)
+            best[take], score[take] = i, s[take]
             bu[take], bv[take] = u[take], v[take]
         return best, bu, bv
 
@@ -140,7 +147,7 @@ def load_photos(meta_path, max_focal=None):
     """讀取對照檔與其中列出的照片。
 
     對照檔是 JSON：{"hfov": 預設視角, "photos": [{"file", "azimuth", "elevation",
-    "roll", "hfov"}, ...]}，角度以度為單位，檔案路徑相對於對照檔所在的資料夾。
+    "roll", "hfov", "priority"}, ...]}，角度以度為單位，檔案路徑相對於對照檔所在的資料夾。
     max_focal 給定時，解析度超過需求的照片會先縮小，避免取樣時產生雜訊並節省記憶體。
     """
     meta_path = Path(meta_path)
@@ -165,6 +172,7 @@ def load_photos(meta_path, max_focal=None):
                 elevation=float(entry["elevation"]),
                 hfov=float(hfov),
                 roll=float(entry.get("roll", 0.0)),
+                priority=float(entry.get("priority", 0.0)),
                 name=entry["file"],
             )
         )

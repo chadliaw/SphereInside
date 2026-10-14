@@ -30,6 +30,18 @@
   .grid input, .grid select { width: 100%; }
   a.button { padding: 12px 18px; border-radius: 8px; background: var(--panel); color: var(--accent); text-decoration: none; font-weight: 600; }
   pre { margin: 12px 0; padding: 12px; background: var(--panel); border-radius: 8px; color: var(--muted); font: 13px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #align { position: fixed; inset: 0; z-index: 10; overflow: auto; background: var(--bg); }
+  #align .viewer { position: relative; height: 62vh; min-height: 280px; background: #000; }
+  #align .viewer canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #overlay { touch-action: none; cursor: grab; }
+  #align .controls { max-width: 900px; margin: 0 auto; padding: 4px 16px 24px; }
+  #align .row { margin: 8px 0; }
+  #align button { padding: 10px 14px; }
+  #align button[aria-pressed="true"] { background: var(--accent); color: #06281a; }
+  #photoInfo { color: var(--text); }
+  .fields { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 8px 0; }
+  .fields label { display: flex; align-items: center; gap: 6px; }
+  .fields input { width: 6.5em; font-variant-numeric: tabular-nums; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -44,8 +56,9 @@
       <input id="fov" type="number" min="20" max="150" step="0.5" value="65">
     </div>
     <div class="row"><button id="start" class="primary">開始</button></div>
-    <p>已經拍好了？選擇先前下載的 ZIP，直接到下方產生展開圖。</p>
+    <p>已經拍好了？選擇先前下載的 ZIP，直接到下方對齊照片或產生展開圖。</p>
     <div class="row"><input id="zip" type="file" accept=".zip,application/zip"></div>
+    <p id="loaded"></p>
   </section>
 
   <section id="shoot" hidden>
@@ -82,6 +95,8 @@
       <select id="dpi"><option value="200" selected>標準（200 dpi）</option><option value="300">精細（300 dpi，較慢）</option></select>
     </div>
     <div class="row"><label><input id="gaps" type="checkbox"> 照片沒有涵蓋所有方向時仍然輸出，缺的地方填灰色</label></div>
+    <p>照片接縫對不齊時，可以先手動對齊再產生 PDF。</p>
+    <div class="row"><button id="openAlign" disabled>手動對齊照片</button></div>
     <div class="row">
       <button id="make" class="primary" disabled>產生 PDF</button>
       <a id="result" class="button" hidden download="sphereinside.pdf">下載 PDF</a>
@@ -90,6 +105,61 @@
   </section>
 </main>
 
+<section id="align" hidden>
+  <div class="viewer">
+    <canvas id="gl"></canvas>
+    <canvas id="overlay"></canvas>
+  </div>
+  <div class="controls">
+    <p id="alignStatus"></p>
+    <div class="row">
+      <button id="modeView" aria-pressed="true">移動視角</button>
+      <button id="modeAdjust" aria-pressed="false">調整照片</button>
+      <label><input id="translucent" type="checkbox"> 選取的照片半透明</label>
+      <label><input id="showMesh" type="checkbox" checked> 顯示多面體</label>
+    </div>
+    <div class="row">
+      <button id="prevVertex">◀ 上一個頂點</button>
+      <span id="vertexInfo">–</span>
+      <button id="nextVertex">下一個頂點 ▶</button>
+    </div>
+    <p id="photoInfo">點一下畫面，選取負責那一塊的照片。</p>
+    <div class="fields" id="photoFields" hidden>
+      <label>方位 <input data-field="azimuth" type="number" step="0.1"> °</label>
+      <label>仰角 <input data-field="elevation" type="number" step="0.1" min="-90" max="90"> °</label>
+      <label>傾斜 <input data-field="roll" type="number" step="0.1"> °</label>
+      <label>視角 <input data-field="hfov" type="number" step="0.1" min="1" max="170"> °</label>
+      <label>順序 <input data-field="priority" type="number" step="1"></label>
+    </div>
+    <div class="row" id="orderRow" hidden>
+      <button id="toFront">移到最前</button>
+      <button id="toBack">移到最後</button>
+      <button id="autoOrder">自動順序</button>
+    </div>
+    <div class="row">
+      <label>每次調整 <input id="step" type="number" value="0.2" min="0.01" step="0.1"> °</label>
+      <button data-nudge="-1,0" title="左移">←</button>
+      <button data-nudge="1,0" title="右移">→</button>
+      <button data-nudge="0,1" title="上移">↑</button>
+      <button data-nudge="0,-1" title="下移">↓</button>
+      <button data-roll="-1" title="逆時針旋轉">⟲</button>
+      <button data-roll="1" title="順時針旋轉">⟳</button>
+      <button data-zoom="-1" title="縮小">－</button>
+      <button data-zoom="1" title="放大">＋</button>
+      <label><input id="allFov" type="checkbox" checked> 縮放套用到所有照片</label>
+    </div>
+    <div class="row">
+      <button id="alignUndo">復原</button>
+      <button id="alignReset">重設這張</button>
+      <button id="alignDownload">下載修正後的 ZIP</button>
+      <button id="alignDone" class="primary">完成</button>
+    </div>
+    <p>移動視角：拖曳轉動，滾輪或雙指縮放。調整照片：拖曳移動選取的照片，滾輪或雙指縮放改變視角，雙指轉動改變傾斜。也可以直接輸入數值，或用按鈕與鍵盤（方向鍵、[ ]、- =）依「每次調整」的角度微調，按住 Shift 加大五倍。</p>
+    <p>順序決定照片重疊時誰在上面：數字大的在上面，相同時由鏡頭中心較近的那張負責。全部是 0 就是自動。</p>
+  </div>
+</section>
+
+<script src="align.js"></script>
 <script>
 "use strict";
 
@@ -132,17 +202,20 @@ function basis(azimuth, elevation, roll) {
   };
 }
 
-// 由裝置的姿態求後鏡頭的方位、仰角與傾斜。screenAngle 是 screen.orientation.angle。
-function pose(alpha, beta, gamma, screenAngle) {
-  const toWorld = deviceToWorld(alpha, beta, gamma);
-  const fwd = toWorld([0, 0, -1]);
-  const a = screenAngle * RAD;
-  const right = toWorld([Math.cos(a), -Math.sin(a), 0]);
+// basis 的反運算：由鏡頭的前、右兩個方向求方位、仰角與傾斜
+function paramsFromBasis(fwd, right) {
   const azimuth = ((Math.atan2(-fwd[1], fwd[0]) / RAD) % 360 + 360) % 360;
   const elevation = Math.asin(Math.max(-1, Math.min(1, fwd[2]))) / RAD;
   const ref = basis(azimuth, elevation, 0);
   const roll = Math.atan2(dot(right, ref.up), dot(right, ref.right)) / RAD;
   return { azimuth, elevation, roll };
+}
+
+// 由裝置的姿態求後鏡頭的方位、仰角與傾斜。screenAngle 是 screen.orientation.angle。
+function pose(alpha, beta, gamma, screenAngle) {
+  const toWorld = deviceToWorld(alpha, beta, gamma);
+  const a = screenAngle * RAD;
+  return paramsFromBasis(toWorld([0, 0, -1]), toWorld([Math.cos(a), -Math.sin(a), 0]));
 }
 
 // 沿影像寬度方向的視角
@@ -234,11 +307,36 @@ function makeZip(files) {
   return new Blob([...parts, ...central, end.buffer], { type: "application/zip" });
 }
 
+// 讀取 ZIP：回傳 { 檔名: Uint8Array }。支援不壓縮與 deflate 壓縮
+async function readZip(buffer) {
+  const view = new DataView(buffer), bytes = new Uint8Array(buffer), decoder = new TextDecoder();
+  let end = -1;
+  for (let i = buffer.byteLength - 22; i >= Math.max(0, buffer.byteLength - 22 - 65535); i--) {
+    if (view.getUint32(i, true) === 0x06054b50) { end = i; break; }
+  }
+  if (end < 0) throw new Error("這不是 ZIP 檔。");
+  const files = {};
+  let p = view.getUint32(end + 16, true);
+  for (let n = view.getUint16(end + 10, true); n > 0; n--) {
+    if (view.getUint32(p, true) !== 0x02014b50) throw new Error("ZIP 檔已損毀。");
+    const method = view.getUint16(p + 10, true), size = view.getUint32(p + 20, true);
+    const nameLength = view.getUint16(p + 28, true), extra = view.getUint16(p + 30, true), comment = view.getUint16(p + 32, true);
+    const name = decoder.decode(bytes.subarray(p + 46, p + 46 + nameLength));
+    const local = view.getUint32(p + 42, true);
+    const start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
+    const raw = bytes.subarray(start, start + size);
+    if (method === 0) files[name] = raw;
+    else if (method === 8) files[name] = new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer());
+    p += 46 + nameLength + extra + comment;
+  }
+  return files;
+}
+
 // ---- 介面 ------------------------------------------------------------------
 
 const $ = (id) => document.getElementById(id);
 const POINTS = fibonacciSphere(3000);
-const shots = [];  // { name, blob, azimuth, elevation, roll, hfov, width, height, basis }
+const shots = [];  // { name, blob, azimuth, elevation, roll, hfov, width, height, basis }；拍攝或讀入 ZIP 後都放在這裡
 let orientation = null, covered = POINTS.map(() => false);
 
 function currentPose() {
@@ -339,9 +437,11 @@ async function collectFiles() {
   const round = (x) => Math.round(x * 100) / 100;
   const files = [], photos = [];
   for (let i = 0; i < shots.length; i++) {
-    const s = shots[i], name = String(i + 1).padStart(3, "0") + ".jpg";
+    const s = shots[i], name = s.name || String(i + 1).padStart(3, "0") + ".jpg";
     files.push({ name, data: new Uint8Array(await s.blob.arrayBuffer()) });
-    photos.push({ file: name, azimuth: round(s.azimuth), elevation: round(s.elevation), roll: round(s.roll), hfov: round(s.hfov) });
+    const entry = { file: name, azimuth: round(s.azimuth), elevation: round(s.elevation), roll: round(s.roll), hfov: round(s.hfov) };
+    if (s.priority) entry.priority = s.priority;
+    photos.push(entry);
   }
   files.push({ name: "meta.json", data: new TextEncoder().encode(JSON.stringify({ photos }, null, 2)) });
   return files;
@@ -360,7 +460,8 @@ async function download() {
 let worker = null, building = false;
 
 function updateMake() {
-  $("make").disabled = building || (shots.length === 0 && $("zip").files.length === 0);
+  $("make").disabled = building || shots.length === 0;
+  $("openAlign").disabled = shots.length === 0;
 }
 
 function log(text) {
@@ -379,14 +480,10 @@ async function make() {
   $("log").textContent = "";
   $("result").hidden = true;
   const job = {
-    files: [],
-    zip: null,
+    files: await collectFiles(),
     args: ["--level", $("level").value, "--diameter", String(Number($("diameter").value) || 150), "--paper", $("paper").value, "--dpi", $("dpi").value],
   };
   if ($("gaps").checked) job.args.push("--allow-gaps");
-  // 這次拍的照片優先；沒有才用選擇的 ZIP
-  if (shots.length > 0) job.files = await collectFiles();
-  else job.zip = new Uint8Array(await $("zip").files[0].arrayBuffer());
 
   if (!worker) {
     worker = new Worker("build-worker.js");
@@ -413,12 +510,150 @@ async function make() {
   worker.postMessage(job);
 }
 
+// 讀入先前下載的 ZIP，取代目前的照片
+async function loadZip() {
+  const file = $("zip").files[0];
+  if (!file) return;
+  $("loaded").textContent = "讀取中…";
+  try {
+    const files = await readZip(await file.arrayBuffer());
+    const metaName = Object.keys(files).find((n) => n.split("/").pop() === "meta.json");
+    if (!metaName) throw new Error("ZIP 裡找不到 meta.json。");
+    const meta = JSON.parse(new TextDecoder().decode(files[metaName]));
+    const folder = metaName.slice(0, metaName.length - "meta.json".length);
+    const loaded = [];
+    for (const entry of meta.photos) {
+      const data = files[folder + entry.file];
+      if (!data) throw new Error(`ZIP 裡找不到 ${entry.file}。`);
+      const hfov = entry.hfov ?? meta.hfov;
+      if (hfov == null) throw new Error(`${entry.file} 沒有視角（hfov）。`);
+      const blob = new Blob([data], { type: entry.file.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg" });
+      const bitmap = await createImageBitmap(blob);
+      const roll = entry.roll || 0;
+      loaded.push({
+        name: entry.file.split("/").pop(), blob, hfov, width: bitmap.width, height: bitmap.height,
+        azimuth: entry.azimuth, elevation: entry.elevation, roll, priority: entry.priority || 0,
+        basis: basis(entry.azimuth, entry.elevation, roll),
+      });
+      bitmap.close();
+    }
+    shots.splice(0, shots.length, ...loaded);
+    $("loaded").textContent = `已讀入 ${loaded.length} 張照片。`;
+    refresh();
+  } catch (error) {
+    $("loaded").textContent = error.message || String(error);
+  }
+}
+
+let aligner = null, polyhedra = null;
+
+function showPhotoInfo() {
+  const a = aligner;
+  if (!a) return;
+  const s = a.shots[a.selected];
+  $("photoInfo").textContent = s ? `選取：${s.name || "照片 " + (a.selected + 1)}` : "點一下畫面，選取負責那一塊的照片。";
+  $("photoFields").hidden = $("orderRow").hidden = !s;
+  if (s) {
+    const digits = { azimuth: 2, elevation: 2, roll: 2, hfov: 2, priority: 0 };
+    document.querySelectorAll("[data-field]").forEach((input) => {
+      // 正在輸入的欄位不要被覆蓋
+      if (input !== document.activeElement) input.value = Number(s[input.dataset.field] || 0).toFixed(digits[input.dataset.field]);
+    });
+  }
+  $("vertexInfo").textContent = a.vertex < 0 ? `共 ${a.order.length} 個頂點` : `頂點 ${a.vertex + 1} / ${a.order.length}`;
+}
+
+function setMode(mode) {
+  aligner.mode = mode;
+  $("modeView").setAttribute("aria-pressed", mode === "view");
+  $("modeAdjust").setAttribute("aria-pressed", mode === "adjust");
+}
+
+async function openAlign() {
+  $("align").hidden = false;
+  document.body.style.overflow = "hidden";
+  $("alignStatus").textContent = "載入照片…";
+  try {
+    if (!polyhedra) polyhedra = await (await fetch("polyhedra.json")).json();
+    const level = $("level").value;
+    aligner = new Aligner($("gl"), $("overlay"), shots, polyhedra[level], Number(level));
+    aligner.onchange = showPhotoInfo;
+    await aligner.init((i, n) => { $("alignStatus").textContent = `載入照片 ${i + 1} / ${n}…`; });
+    aligner.attach();
+    aligner.translucent = $("translucent").checked;
+    aligner.showMesh = $("showMesh").checked;
+    aligner.allFov = $("allFov").checked;
+    setMode("view");
+    $("alignStatus").textContent = "";
+    aligner.goToVertex(1);
+  } catch (error) {
+    $("alignStatus").textContent = error.message || String(error);
+  }
+}
+
+function closeAlign() {
+  $("align").hidden = true;
+  document.body.style.overflow = "";
+  if (aligner && aligner.gl) aligner.gl.getExtension("WEBGL_lose_context")?.loseContext();
+  // 換上新的畫布，下次開啟時才能重新取得 WebGL
+  for (const id of ["gl", "overlay"]) $(id).replaceWith($(id).cloneNode(false));
+  aligner = null;
+  refresh();
+}
+
+// 微調的角度（度）
+function stepSize(e) {
+  return Math.max(0.01, Number($("step").value) || 0.2) * (e && e.shiftKey ? 5 : 1);
+}
+
+function alignKey(e) {
+  if (!aligner || $("align").hidden || e.target.tagName === "INPUT") return;
+  const step = stepSize(e);
+  let action = {
+    ArrowLeft: () => aligner.nudge(-step, 0), ArrowRight: () => aligner.nudge(step, 0),
+    ArrowUp: () => aligner.nudge(0, step), ArrowDown: () => aligner.nudge(0, -step),
+    "[": () => aligner.roll(-step), "{": () => aligner.roll(-step), "]": () => aligner.roll(step), "}": () => aligner.roll(step),
+    "-": () => aligner.widen(-step), "_": () => aligner.widen(-step), "=": () => aligner.widen(step), "+": () => aligner.widen(step),
+  }[e.key];
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") action = () => aligner.undo();
+  if (!action) return;
+  e.preventDefault();
+  action();
+}
+
 $("start").addEventListener("click", start);
 $("shutter").addEventListener("click", shoot);
 $("undo").addEventListener("click", () => { shots.pop(); refresh(); });
 $("download").addEventListener("click", download);
-$("zip").addEventListener("change", updateMake);
+$("zip").addEventListener("change", loadZip);
 $("make").addEventListener("click", make);
+$("openAlign").addEventListener("click", openAlign);
+$("alignDone").addEventListener("click", closeAlign);
+$("alignDownload").addEventListener("click", download);
+$("alignUndo").addEventListener("click", () => aligner && aligner.undo());
+$("alignReset").addEventListener("click", () => aligner && aligner.resetSelected());
+$("modeView").addEventListener("click", () => aligner && setMode("view"));
+$("modeAdjust").addEventListener("click", () => aligner && setMode("adjust"));
+$("prevVertex").addEventListener("click", () => aligner && aligner.goToVertex(-1));
+$("nextVertex").addEventListener("click", () => aligner && aligner.goToVertex(1));
+$("translucent").addEventListener("change", (e) => { if (aligner) { aligner.translucent = e.target.checked; aligner.draw(); } });
+$("showMesh").addEventListener("change", (e) => { if (aligner) { aligner.showMesh = e.target.checked; aligner.draw(); } });
+$("allFov").addEventListener("change", (e) => { if (aligner) aligner.allFov = e.target.checked; });
+document.querySelectorAll("[data-nudge]").forEach((b) => b.addEventListener("click", (e) => {
+  const [x, y] = b.dataset.nudge.split(",").map(Number), step = stepSize(e);
+  if (aligner) aligner.nudge(x * step, y * step);
+}));
+document.querySelectorAll("[data-roll]").forEach((b) => b.addEventListener("click", (e) => aligner && aligner.roll(Number(b.dataset.roll) * stepSize(e))));
+document.querySelectorAll("[data-zoom]").forEach((b) => b.addEventListener("click", (e) => aligner && aligner.widen(Number(b.dataset.zoom) * stepSize(e))));
+document.querySelectorAll("[data-field]").forEach((input) => input.addEventListener("change", () => {
+  if (aligner) aligner.setValue(input.dataset.field, Number(input.value));
+  showPhotoInfo();
+}));
+$("toFront").addEventListener("click", () => aligner && aligner.arrange("front"));
+$("toBack").addEventListener("click", () => aligner && aligner.arrange("back"));
+$("autoOrder").addEventListener("click", () => aligner && aligner.arrange("auto"));
+document.addEventListener("keydown", alignKey);
+window.addEventListener("resize", () => aligner && aligner.resize());
 </script>
 </body>
 </html>

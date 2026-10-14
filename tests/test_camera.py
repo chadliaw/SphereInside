@@ -56,6 +56,17 @@ class CameraTest(unittest.TestCase):
         self.assertTrue(ok.all())
         self.assertLess(np.abs(colors - scene(dirs)).max(), 2.5)
 
+    def test_priority_decides_overlap(self):
+        a = render_photo(lambda d: np.full((len(d), 3), 10.0), 0, 0, 60, 40, 40)
+        b = render_photo(lambda d: np.full((len(d), 3), 200.0), 20, 0, 60, 40, 40)
+        d = np.array([[np.cos(np.radians(5)), -np.sin(np.radians(5)), 0]])  # 方位 5°，較靠近 a 的中心
+        self.assertEqual(PhotoSet([a, b]).sample(d)[0][0, 0], 10)
+        b.priority = 1
+        self.assertEqual(PhotoSet([a, b]).sample(d)[0][0, 0], 200)
+        # 順序只在照片涵蓋的範圍內有效
+        far = np.array([[np.cos(np.radians(-25)), -np.sin(np.radians(-25)), 0]])
+        self.assertEqual(PhotoSet([a, b]).sample(far)[0][0, 0], 10)
+
     def test_behind_camera_is_not_covered(self):
         photos = PhotoSet([render_photo(scene, 0, 0, 60, 80, 80)])
         self.assertFalse(photos.covered(np.array([[-1.0, 0, 0], [0, 1.0, 0]])).any())
